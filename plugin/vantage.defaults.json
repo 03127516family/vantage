@@ -1,6 +1,6 @@
 {
   "_comment": "dgcrane 管理员：发布前把 server_url/token 改成真实值；departments 改成公司真实部门（setup 让员工选）。",
-  "server_url": "http://localhost:3000",
-  "token": "dev-token-change-me",
+  "server_url": "http://192.168.20.15:3000",
+  "token": "dgcrane-vantage-trial",
   "departments": ["研发部", "产品部", "测试部", "设计部", "运营部", "其他"]
 }
