@@ -1,0 +1,17 @@
+{
+  "name": "vantage-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vantage 后端：接收 Claude Code / Codex 使用情况上报并存入 JSONL",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

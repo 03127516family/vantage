@@ -1,0 +1,16 @@
+{
+  "name": "dgcrane",
+  "owner": {
+    "name": "dgcrane"
+  },
+  "description": "dgcrane 内部工具市场",
+  "version": "1.0.0",
+  "plugins": [
+    {
+      "name": "vantage",
+      "source": "./plugin",
+      "displayName": "Vantage",
+      "description": "采集 Claude Code / Codex 使用情况并上报"
+    }
+  ]
+}

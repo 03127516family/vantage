@@ -1,0 +1,5 @@
+{
+  "_comment": "dgcrane 管理员：发布插件前把下面两项改成真实后端地址与上传密钥；员工无需填写。",
+  "server_url": "http://localhost:3000",
+  "token": "dev-token-change-me"
+}

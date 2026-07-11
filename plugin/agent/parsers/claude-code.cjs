@@ -1,0 +1,129 @@
+"use strict";
+// 解析 Claude Code 的 transcript JSONL。极度容错：任何字段缺失/格式变化都不崩，
+// 拿不到就留空。官方声明该格式为内部实现、可能变动，所以这里全部防御式取值。
+const fs = require("node:fs");
+const { redact, truncate } = require("../core.cjs");
+
+// 从 message.content 里提取纯文本（content 可能是字符串或内容块数组）
+function extractText(message) {
+  if (!message) return "";
+  const c = message.content;
+  if (typeof c === "string") return c;
+  if (Array.isArray(c)) {
+    return c
+      .filter((b) => b && b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text)
+      .join("\n");
+  }
+  return "";
+}
+
+// 判断一条 user 行是否为"真人提问"（排除工具结果回填）
+function isHumanPrompt(o) {
+  if (!o.message || o.message.role !== "user") return false;
+  const c = o.message.content;
+  if (typeof c === "string") return c.trim().length > 0;
+  if (Array.isArray(c)) {
+    // 含 tool_result 的是工具回填，不是真人提问
+    if (c.some((b) => b && b.type === "tool_result")) return false;
+    return c.some((b) => b && b.type === "text" && b.text && b.text.trim());
+  }
+  return false;
+}
+
+function countToolUses(message) {
+  if (!message || !Array.isArray(message.content)) return 0;
+  return message.content.filter((b) => b && b.type === "tool_use").length;
+}
+
+/**
+ * @param {string} transcriptPath
+ * @returns {object|null} UsageRecord（不含身份，由 collector 合并）
+ */
+function parseClaudeTranscript(transcriptPath) {
+  let content;
+  try {
+    content = fs.readFileSync(transcriptPath, "utf8");
+  } catch {
+    return null;
+  }
+  const lines = content.split("\n");
+
+  let sessionId = "";
+  let cwd = "";
+  let firstPrompt = "";
+  let aiTitle = "";
+  let lastPrompt = "";
+  let userMessages = 0;
+  let assistantMessages = 0;
+  let toolCalls = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let firstTs = "";
+  let lastTs = "";
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (o.sessionId && !sessionId) sessionId = o.sessionId;
+    if (o.cwd && !cwd) cwd = o.cwd;
+    if (o.timestamp) {
+      if (!firstTs) firstTs = o.timestamp;
+      lastTs = o.timestamp;
+    }
+    if (o.type === "ai-title" && o.aiTitle) aiTitle = String(o.aiTitle);
+    if (o.type === "last-prompt" && o.lastPrompt) lastPrompt = String(o.lastPrompt);
+
+    if (o.type === "user" && isHumanPrompt(o)) {
+      userMessages += 1;
+      if (!firstPrompt) firstPrompt = extractText(o.message);
+    }
+
+    if (o.type === "assistant" && o.message) {
+      assistantMessages += 1;
+      toolCalls += countToolUses(o.message);
+      // 逐轮累加非缓存输入 + 输出 = 本次会话的 token 消耗量。
+      // 与 Codex 的 total_token_usage（其内部也是逐轮累加）口径一致，便于横向比较。
+      const u = o.message.usage;
+      if (u) {
+        inputTokens += Number(u.input_tokens || 0);
+        outputTokens += Number(u.output_tokens || 0);
+      }
+    }
+  }
+
+  // 摘要优先级：AI 标题 > 首句提问 > 最后提问
+  const summarySource = aiTitle || firstPrompt || lastPrompt || "";
+  const summary = truncate(redact(summarySource), 120);
+
+  let durationMs = null;
+  if (firstTs && lastTs) {
+    const d = Date.parse(lastTs) - Date.parse(firstTs);
+    if (!Number.isNaN(d) && d >= 0) durationMs = d;
+  }
+
+  return {
+    tool: "claude-code",
+    session_id: sessionId,
+    project: cwd,
+    started_at: firstTs || null,
+    ended_at: lastTs || null,
+    duration_ms: durationMs,
+    user_messages: userMessages,
+    assistant_messages: assistantMessages,
+    tool_calls: toolCalls,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: inputTokens + outputTokens,
+    first_prompt: truncate(redact(firstPrompt), 300),
+    summary,
+  };
+}
+
+module.exports = { parseClaudeTranscript };
