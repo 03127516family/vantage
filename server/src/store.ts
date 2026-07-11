@@ -22,6 +22,7 @@ export interface UsageRecord {
   // 会话
   tool?: string; // 'claude-code' | 'codex'
   session_id?: string;
+  model?: string; // 使用的模型，如 claude-opus-4-8 / gpt-5.5
   project?: string;
   started_at?: string;
   ended_at?: string;

@@ -59,6 +59,7 @@ function parseClaudeTranscript(transcriptPath) {
   let toolCalls = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let model = "";
   let firstTs = "";
   let lastTs = "";
 
@@ -88,6 +89,7 @@ function parseClaudeTranscript(transcriptPath) {
     if (o.type === "assistant" && o.message) {
       assistantMessages += 1;
       toolCalls += countToolUses(o.message);
+      if (o.message.model) model = String(o.message.model); // 记录使用的模型（取最后一次）
       // 逐轮累加非缓存输入 + 输出 = 本次会话的 token 消耗量。
       // 与 Codex 的 total_token_usage（其内部也是逐轮累加）口径一致，便于横向比较。
       const u = o.message.usage;
@@ -111,6 +113,7 @@ function parseClaudeTranscript(transcriptPath) {
   return {
     tool: "claude-code",
     session_id: sessionId,
+    model,
     project: cwd,
     started_at: firstTs || null,
     ended_at: lastTs || null,

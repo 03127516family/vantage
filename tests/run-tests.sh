@@ -64,6 +64,7 @@ assert "T1 服务端收到 S1"        "赵六"   "$(name_of "$S1")"
 assert "T1 spool 已清空"         "0"      "$(spool_n)"
 assert "T1 exit_reason=logout"   "logout" "$($Q field "$S1" exit_reason)"
 assert "T1 摘要取到 AI 标题"     "Fix login page error" "$($Q field "$S1" summary)"
+assert "T1 记录了模型"           "claude-opus-4-8" "$($Q field "$S1" model)"
 
 echo "== T2: 同会话重复触发 -> 去重 =="
 endhook "$S1" "clear"; sleep 0.6
@@ -88,6 +89,7 @@ echo "== T6: Codex 会话被扫到并上报 =="
 starthook "none"; sleep 0.6
 assert "T6 服务端收到 codex 会话" "赵六"  "$(name_of "$S3")"
 assert "T6 codex 工具标记正确"    "codex" "$($Q field "$S3" tool)"
+assert "T6 codex 模型正确"        "gpt-5.5" "$($Q field "$S3" model)"
 
 echo "== T7: 会话变大 -> 重新采（用量更新） =="
 BEFORE="$($Q field "$S1" total_tokens)"

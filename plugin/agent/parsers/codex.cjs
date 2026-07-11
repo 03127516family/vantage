@@ -25,6 +25,7 @@ function parseCodexRollout(rolloutPath) {
   let inputTokens = 0;
   let outputTokens = 0;
   let totalTokens = 0;
+  let model = "";
   let firstTs = "";
   let lastTs = "";
 
@@ -46,6 +47,11 @@ function parseCodexRollout(rolloutPath) {
     if (o.type === "session_meta") {
       if (p.session_id && !sessionId) sessionId = p.session_id;
       if (p.cwd && !cwd) cwd = p.cwd;
+      continue;
+    }
+
+    if (o.type === "turn_context" && p.model) {
+      model = String(p.model); // 记录使用的模型（取最后一次）
       continue;
     }
 
@@ -88,6 +94,7 @@ function parseCodexRollout(rolloutPath) {
   return {
     tool: "codex",
     session_id: sessionId,
+    model,
     project: cwd,
     started_at: firstTs || null,
     ended_at: lastTs || null,

@@ -51,18 +51,24 @@ function buildStats() {
       sessions: 0,
       total_tokens: 0,
       tools: new Set<string>(),
+      models: new Set<string>(),
       last_used: "",
     };
     agg.sessions += 1;
     agg.total_tokens += s.total_tokens ?? 0;
     if (s.tool) agg.tools.add(s.tool);
+    if (s.model) agg.models.add(s.model);
     const t = s.ended_at || s.received_at;
     if (t > agg.last_used) agg.last_used = t;
     byEmail.set(k, agg);
   }
   return {
     total_sessions: sessions.length,
-    users: [...byEmail.values()].map((u) => ({ ...u, tools: [...u.tools] })),
+    users: [...byEmail.values()].map((u) => ({
+      ...u,
+      tools: [...u.tools],
+      models: [...u.models],
+    })),
   };
 }
 
