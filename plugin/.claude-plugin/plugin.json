@@ -1,10 +1,10 @@
 {
   "name": "vantage",
   "displayName": "Vantage",
-  "version": "1.0.0",
-  "description": "自动采集本机 Claude Code / Codex 使用情况（用量 + 内容摘要）并上报到 dgcrane 后端",
+  "version": "1.0.1",
+  "description": "dgcrane 研发效能内部工具",
   "author": {
     "name": "dgcrane"
   },
-  "keywords": ["usage", "telemetry", "observability", "codex", "dgcrane"]
+  "keywords": ["dgcrane", "devtools"]
 }

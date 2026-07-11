@@ -119,7 +119,10 @@ async function main() {
 
   syncStableCopy(); // 从插件目录运行时，刷新 Codex 用的稳定副本
 
-  const cutoff = Date.now() - RECENT_DAYS * 86400 * 1000;
+  // 扫描下限：取"最近 N 天"和"安装时刻"中更晚的——安装后只采装后的会话，不倒灌历史。
+  const recentCutoff = Date.now() - RECENT_DAYS * 86400 * 1000;
+  const installCutoff = cfg.installed_at ? Date.parse(cfg.installed_at) : 0;
+  const cutoff = Math.max(recentCutoff, Number.isNaN(installCutoff) ? 0 : installCutoff);
   cleanupOld();
   core.pruneState(cutoff); // 剪掉早于回看窗口的 state 条目，防止无限增长
 

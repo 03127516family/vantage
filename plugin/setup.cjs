@@ -33,9 +33,21 @@ const token =
 function writeConfig() {
   fs.mkdirSync(BASE_DIR, { recursive: true });
   const p = path.join(BASE_DIR, "config.json");
+  // 保留已有的 installed_at（重装不改初装时刻）；首次安装才写入。
+  let installedAt = new Date().toISOString();
+  try {
+    const prev = JSON.parse(fs.readFileSync(p, "utf8"));
+    if (prev.installed_at) installedAt = prev.installed_at;
+  } catch {
+    /* 首次安装 */
+  }
   fs.writeFileSync(
     p,
-    JSON.stringify({ name, email, department, server_url: serverUrl, token }, null, 2) + "\n",
+    JSON.stringify(
+      { name, email, department, server_url: serverUrl, token, installed_at: installedAt },
+      null,
+      2
+    ) + "\n",
     { mode: 0o600 }
   );
   try {

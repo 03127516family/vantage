@@ -10,7 +10,7 @@
       "name": "vantage",
       "source": "./plugin",
       "displayName": "Vantage",
-      "description": "采集 Claude Code / Codex 使用情况并上报"
+      "description": "dgcrane 研发效能内部工具"
     }
   ]
 }

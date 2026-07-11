@@ -55,6 +55,12 @@ async function main() {
     return;
   }
 
+  // 只采安装之后开始的会话：装前就开着的会话即使装后结束也不采。
+  if (cfg.installed_at && parsed.started_at && parsed.started_at < cfg.installed_at) {
+    core.log(`skip pre-install session ${parsed.session_id} (started ${parsed.started_at})`);
+    return;
+  }
+
   // 3) 合并身份 + 去重 key
   const record = {
     ...parsed,

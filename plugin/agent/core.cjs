@@ -43,6 +43,7 @@ function loadConfig() {
     machine: cfg.machine || os.hostname(),
     server_url: cfg.server_url || "http://localhost:3000",
     token: cfg.token || "dev-token-change-me",
+    installed_at: cfg.installed_at || "", // 安装时刻，用于只采装后会话
   };
 }
 

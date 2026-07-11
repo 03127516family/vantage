@@ -49,6 +49,7 @@ spool_n(){ ls "$SPOOL"/*.json 2>/dev/null | wc -l | tr -d ' '; }
 dead_n(){ ls "$DEAD" 2>/dev/null | wc -l | tr -d ' '; }
 name_of(){ $Q get "$1" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).name)}catch{process.stdout.write("MISSING")}})'; }
 setcfg(){ node -e 'const fs=require("fs");const p=process.argv[2];const c=JSON.parse(fs.readFileSync(p));c.server_url=process.argv[1];fs.writeFileSync(p,JSON.stringify(c))' "$1" "$CONFIG"; }
+set_installed(){ node -e 'const fs=require("fs");const p=process.argv[2];const c=JSON.parse(fs.readFileSync(p));c.installed_at=process.argv[1];fs.writeFileSync(p,JSON.stringify(c))' "$1" "$CONFIG"; }
 endhook(){ echo "{\"session_id\":\"$1\",\"transcript_path\":\"$SB/.claude/projects/proj/$1.jsonl\",\"hook_event_name\":\"SessionEnd\",\"exit_reason\":\"$2\"}" | HOME="$SB" node "$AGENT/capture.cjs"; }
 starthook(){ echo "{\"session_id\":\"$1\",\"hook_event_name\":\"SessionStart\"}" | HOME="$SB" node "$AGENT/reconcile.cjs"; }
 run_flush(){ HOME="$SB" node "$AGENT/flush.cjs"; }
@@ -57,6 +58,8 @@ echo "== setup（写配置 + 同步 agent，跳过触发器）=="
 HOME="$SB" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "赵六" "zhao@example.com" "研发一部" "$LIVE" "$TOKEN" >/dev/null
 assert "setup 写入身份=赵六" "赵六" "$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1])).name)' "$CONFIG")"
 assert "setup 同步了稳定副本 agent" "1" "$([ -f "$SB/.vantage/agent/capture.cjs" ] && echo 1 || echo 0)"
+# 样本用固定的 2026-07-10 日期，把安装时刻设到更早，让 T1-T12 正常采集
+set_installed "2026-01-01T00:00:00.000Z"
 
 echo "== T1: SessionEnd 采当前会话 =="
 endhook "$S1" "logout"; sleep 0.6
@@ -122,6 +125,17 @@ echo "== T12: Codex 独立触发器（--only codex）可执行 =="
 HOME="$SB" node "$AGENT/reconcile.cjs" --only codex >/dev/null 2>&1; sleep 0.3
 grep 'reconcile:' "$LOG" | tail -1 | grep -q "found" && ok "T12 --only codex 正常执行" \
   || no "T12 --only" "found" "$(grep 'reconcile:' "$LOG" | tail -1)"
+
+echo "== T13: 只采安装之后——装前会话被跳过 =="
+set_installed "2027-01-01T00:00:00.000Z"   # 安装时刻设到样本之后
+rm -f "$SPOOL"/*.json 2>/dev/null
+endhook "$S1" "logout"; sleep 0.4          # S1 起始于 2026-07-10，早于安装 → 应跳过
+if grep -q "skip pre-install" "$LOG" && [ "$(spool_n)" = "0" ]; then
+  ok "T13 装前会话被跳过、未采集"
+else
+  no "T13 应跳过装前会话" "skip + spool0" "spool=$(spool_n)"
+fi
+set_installed "2026-01-01T00:00:00.000Z"   # 恢复
 
 echo ""
 echo "======================================================"
