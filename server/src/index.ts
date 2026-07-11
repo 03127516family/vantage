@@ -42,7 +42,44 @@ function readBody(req: IncomingMessage, limit = 5 * 1024 * 1024): Promise<string
 function buildStats() {
   const sessions = allSessions();
   const byEmail = new Map<string, any>();
+  // 全局「按模型统计」（cc-switch 模型统计视图）：从每条会话的 by_model 汇总。
+  const byModel = new Map<string, any>();
+  const accModelStat = (model: string, u: any) => {
+    const m =
+      byModel.get(model) ??
+      {
+        model,
+        requests: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+      };
+    m.requests += u.requests ?? 0;
+    m.input_tokens += u.input_tokens ?? 0;
+    m.output_tokens += u.output_tokens ?? 0;
+    m.cache_read_tokens += u.cache_read_tokens ?? 0;
+    m.cache_creation_tokens += u.cache_creation_tokens ?? 0;
+    m.reasoning_tokens += u.reasoning_tokens ?? 0;
+    m.total_tokens = m.input_tokens + m.output_tokens;
+    byModel.set(model, m);
+  };
   for (const s of sessions) {
+    // 按模型累计：优先用 by_model 明细；老记录没有则退回 model+总量（一条会话算 1 次请求）。
+    if (s.by_model && typeof s.by_model === "object") {
+      for (const [model, u] of Object.entries(s.by_model)) accModelStat(model, u);
+    } else if (s.model) {
+      accModelStat(s.model, {
+        requests: 1,
+        input_tokens: s.input_tokens,
+        output_tokens: s.output_tokens,
+        cache_read_tokens: s.cache_read_tokens,
+        cache_creation_tokens: s.cache_creation_tokens,
+        reasoning_tokens: s.reasoning_tokens,
+      });
+    }
     const k = s.email || s.machine || "unknown";
     const agg = byEmail.get(k) ?? {
       name: s.name,
@@ -50,25 +87,48 @@ function buildStats() {
       department: s.department,
       sessions: 0,
       total_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
       tools: new Set<string>(),
       models: new Set<string>(),
       last_used: "",
+      // 当前用量（额度）：取“最新一次带额度信息的会话”的快照
+      quota_primary_pct: null as number | null,
+      quota_secondary_pct: null as number | null,
+      quota_plan: null as string | null,
+      quota_reached: null as string | null,
+      quota_at: "",
     };
     agg.sessions += 1;
     agg.total_tokens += s.total_tokens ?? 0;
+    agg.cache_read_tokens += s.cache_read_tokens ?? 0;
+    agg.cache_creation_tokens += s.cache_creation_tokens ?? 0;
     if (s.tool) agg.tools.add(s.tool);
     if (s.model) agg.models.add(s.model);
     const t = s.ended_at || s.received_at;
     if (t > agg.last_used) agg.last_used = t;
+    // 额度是“当前快照”不可累加：谁的会话最新就用谁的
+    if (s.quota_primary_pct != null || s.quota_secondary_pct != null) {
+      const qt = s.ended_at || s.received_at || "";
+      if (qt >= agg.quota_at) {
+        agg.quota_at = qt;
+        agg.quota_primary_pct = s.quota_primary_pct ?? null;
+        agg.quota_secondary_pct = s.quota_secondary_pct ?? null;
+        agg.quota_plan = s.quota_plan ?? null;
+        agg.quota_reached = s.quota_reached ?? null;
+      }
+    }
     byEmail.set(k, agg);
   }
   return {
     total_sessions: sessions.length,
-    users: [...byEmail.values()].map((u) => ({
+    users: [...byEmail.values()].map(({ tools, models, quota_at, ...u }) => ({
       ...u,
-      tools: [...u.tools],
-      models: [...u.models],
+      tools: [...tools],
+      models: [...models],
     })),
+    // 全局按模型统计（请求数/各类 token），供“模型统计”视图与后续算成本用
+    model_stats: [...byModel.values()].sort((a, b) => b.total_tokens - a.total_tokens),
   };
 }
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 "use strict";
-// Vantage —— 兜底对账（reconcile）。
-// Claude：由 SessionStart 钩子调用（开新会话时）；Codex：由登录触发器调用（--only codex）。
-// 职责：回扫历史会话，把"钩子没采到/断网没传成功"的补上（跳过当前刚开的会话），
+// Vantage —— 会话扫描/对账（reconcile）。
+// Claude：由 SessionStart 钩子调用（开新会话时兜底补采）；
+// Codex：由定时任务每小时调用（--only codex），增量扫 ~/.codex/sessions 采集（cc-switch 同款思路，免钩子/免信任）。
+// 职责：扫历史会话，把"没采到/断网没传成功"的补上（跳过当前刚开的会话），
 // 顺手清理死信/损坏文件、剪枝 state、触发上传。永远 exit 0、不打印 stdout。
 const fs = require("node:fs");
 const os = require("node:os");
@@ -31,7 +32,7 @@ const SOURCES = [
 ];
 
 // 若本脚本从插件目录运行（Claude 钩子），把 agent 同步到稳定副本 ~/.vantage/agent，
-// 供 Codex 登录触发器引用——这样插件更新后 Codex 那份也是最新的。
+// 供 Codex 定时任务引用——这样插件更新后 Codex 那份也是最新的。
 function syncStableCopy() {
   const dst = path.join(os.homedir(), ".vantage", "agent");
   if (path.resolve(__dirname) === path.resolve(dst)) return; // 本就是稳定副本，无需同步
@@ -93,7 +94,7 @@ function cleanupOld() {
   }
 }
 
-// 解析 --only <tool>：限定只扫某个数据源（Codex 登录触发器用 --only codex）
+// 解析 --only <tool>：限定只扫某个数据源（Codex 定时任务用 --only codex）
 function parseOnly(argv) {
   const i = argv.indexOf("--only");
   return i >= 0 ? argv[i + 1] : null;

@@ -25,9 +25,32 @@ function parseCodexRollout(rolloutPath) {
   let inputTokens = 0;
   let outputTokens = 0;
   let totalTokens = 0;
+  let cacheReadTokens = 0; // 命中缓存的输入 token（便宜很多，单列以便算准成本）
+  let reasoningTokens = 0; // 推理 token
+  let rateLimits = null; // 当前额度用量：保留最后一次快照
   let model = "";
   let firstTs = "";
   let lastTs = "";
+  // 分模型明细：会话内可能 /model 切换。按“当前 turn_context 的模型”把每轮增量分开累计。
+  const byModel = {};
+  const accModel = (m, last) => {
+    const k = m || "unknown";
+    const b =
+      byModel[k] ||
+      (byModel[k] = {
+        requests: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        reasoning_tokens: 0,
+      });
+    b.requests += 1;
+    b.input_tokens += Number(last.input_tokens || 0);
+    b.output_tokens += Number(last.output_tokens || 0);
+    b.cache_read_tokens += Number(last.cached_input_tokens || 0);
+    b.reasoning_tokens += Number(last.reasoning_output_tokens || 0);
+  };
 
   for (const line of lines) {
     if (!line.trim()) continue;
@@ -68,7 +91,14 @@ function parseCodexRollout(rolloutPath) {
           inputTokens = Number(u.input_tokens || 0);
           outputTokens = Number(u.output_tokens || 0);
           totalTokens = Number(u.total_tokens || inputTokens + outputTokens);
+          cacheReadTokens = Number(u.cached_input_tokens || 0);
+          reasoningTokens = Number(u.reasoning_output_tokens || 0);
         }
+        // 分模型明细用“本轮增量”last_token_usage（deltas 相加=total），归到当前模型
+        const last = p.info && p.info.last_token_usage;
+        if (last) accModel(model, last);
+        // 当前用量（额度）：Codex 每个 token_count 都带 rate_limits，留最后一次即会话结束时的额度状态
+        if (p.rate_limits && typeof p.rate_limits === "object") rateLimits = p.rate_limits;
       }
       continue;
     }
@@ -91,6 +121,12 @@ function parseCodexRollout(rolloutPath) {
     if (!Number.isNaN(d) && d >= 0) durationMs = d;
   }
 
+  // 从 rate_limits 里安全取"已用百分比"（0 是合法值，只有缺失才返回 null）
+  const usedPct = (node) =>
+    node && node.used_percent != null && !Number.isNaN(Number(node.used_percent))
+      ? Number(node.used_percent)
+      : null;
+
   return {
     tool: "codex",
     session_id: sessionId,
@@ -105,6 +141,15 @@ function parseCodexRollout(rolloutPath) {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     total_tokens: totalTokens,
+    cache_read_tokens: cacheReadTokens,
+    cache_creation_tokens: 0, // Codex 无独立的缓存写入计数
+    reasoning_tokens: reasoningTokens,
+    by_model: byModel, // 分模型明细：{ [model]: {requests,input,output,cache_read,cache_creation,reasoning} }
+    // 当前用量（额度）——short=约5小时窗，long=每周窗；used_percent=已用百分比
+    quota_primary_pct: rateLimits ? usedPct(rateLimits.primary) : null,
+    quota_secondary_pct: rateLimits ? usedPct(rateLimits.secondary) : null,
+    quota_plan: rateLimits ? rateLimits.plan_type || null : null,
+    quota_reached: rateLimits ? rateLimits.rate_limit_reached_type || null : null,
     first_prompt: truncate(redact(firstPrompt), 300),
     summary: truncate(redact(firstPrompt), 120), // Codex 无 AI 标题，用首句提问
   };

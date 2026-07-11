@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 "use strict";
 // Vantage —— 一次性 setup（由 /vantage:setup 技能调用，跨平台）。
-// 职责：写身份/服务端配置 -> 把 agent 同步到稳定副本 ~/.vantage/agent -> 安装 Codex 登录触发器。
-// Claude Code 的采集钩子由插件自带（hooks.json），此处不涉及。
+// 职责：写身份/服务端配置 -> 把 agent 同步到稳定副本 ~/.vantage/agent
+//   -> 安装 Codex 定时扫描触发器（每小时跑 reconcile --only codex，扫 ~/.codex/sessions 增量采集）。
+// Claude Code 的采集钩子由插件自带（hooks.json，装插件即受信任，无需手动操作）；
+// Codex 不用钩子（省去逐人 /hooks 手动信任的门槛，装了即采），改用后台定时扫会话文件（cc-switch 同款思路）。
 // 用法: node setup.cjs <name> <email> <department> [serverUrl] [token]
 const fs = require("node:fs");
 const os = require("node:os");
@@ -65,9 +67,11 @@ function syncAgent() {
   console.log(`✓ 已同步 Agent 到稳定副本 ${AGENT_DST}`);
 }
 
+// 安装 Codex 定时扫描触发器：每小时跑一次 reconcile --only codex，增量扫 ~/.codex/sessions。
+// 指向稳定路径 ~/.vantage/agent（插件升级换目录也不失效）。分平台用 launchd/systemd/schtasks。
 function installTrigger() {
   if (process.env.VANTAGE_SKIP_TRIGGER === "1") {
-    console.log("· 跳过 Codex 触发器安装（VANTAGE_SKIP_TRIGGER=1）");
+    console.log("· 跳过 Codex 定时扫描安装（VANTAGE_SKIP_TRIGGER=1）");
     return;
   }
   const node = process.execPath;
@@ -76,9 +80,9 @@ function installTrigger() {
     if (process.platform === "darwin") installLaunchd(node, reconcile);
     else if (process.platform === "linux") installSystemd(node, reconcile);
     else if (process.platform === "win32") installSchtasks(node, reconcile);
-    else console.log(`· 未知平台 ${process.platform}，跳过 Codex 触发器（Claude 仍正常）`);
+    else console.log(`· 未知平台 ${process.platform}，跳过 Codex 定时扫描（Claude 仍正常）`);
   } catch (e) {
-    console.log(`！Codex 触发器安装失败（Claude 采集不受影响）：${e.message}`);
+    console.log(`！Codex 定时扫描安装失败（Claude 采集不受影响）：${e.message}`);
   }
 }
 
@@ -100,6 +104,7 @@ function installLaunchd(node, reconcile) {
     <string>--only</string><string>codex</string>
   </array>
   <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>3600</integer>
 </dict></plist>
 `
   );
@@ -110,28 +115,39 @@ function installLaunchd(node, reconcile) {
     /* 未加载过，忽略 */
   }
   execFileSync("launchctl", ["bootstrap", domain, plist], { stdio: "ignore" });
-  console.log("✓ 已安装 Codex 登录/开机触发器（LaunchAgent，升级安全）");
+  console.log("✓ 已安装 Codex 定时扫描（LaunchAgent，每小时 + 登录时，升级安全）");
 }
 
 function installSystemd(node, reconcile) {
   const dir = path.join(os.homedir(), ".config", "systemd", "user");
   fs.mkdirSync(dir, { recursive: true });
+  // oneshot 服务负责跑一次扫描；timer 每小时拉起它。
   fs.writeFileSync(
     path.join(dir, "vantage-codex.service"),
     `[Unit]
-Description=Vantage - Codex reconcile at login
+Description=Vantage - Codex 会话扫描采集
 [Service]
 Type=oneshot
 ExecStart=${node} ${reconcile} --only codex
+`
+  );
+  fs.writeFileSync(
+    path.join(dir, "vantage-codex.timer"),
+    `[Unit]
+Description=Vantage - 每小时扫描 Codex 会话
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+Persistent=true
 [Install]
-WantedBy=default.target
+WantedBy=timers.target
 `
   );
   execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
-  execFileSync("systemctl", ["--user", "enable", "--now", "vantage-codex.service"], {
+  execFileSync("systemctl", ["--user", "enable", "--now", "vantage-codex.timer"], {
     stdio: "ignore",
   });
-  console.log("✓ 已安装 Codex 登录触发器（systemd user service，升级安全）");
+  console.log("✓ 已安装 Codex 定时扫描（systemd timer，每小时，升级安全）");
 }
 
 function installSchtasks(node, reconcile) {
@@ -142,14 +158,14 @@ function installSchtasks(node, reconcile) {
       "/TN",
       "VantageCodexReconcile",
       "/SC",
-      "ONLOGON",
+      "HOURLY",
       "/TR",
       `"${node}" "${reconcile}" --only codex`,
       "/F",
     ],
     { stdio: "ignore" }
   );
-  console.log("✓ 已安装 Codex 登录触发器（计划任务，升级安全）");
+  console.log("✓ 已安装 Codex 定时扫描（计划任务，每小时，升级安全）");
 }
 
 console.log("== Vantage setup ==");
@@ -164,4 +180,5 @@ console.log("");
 console.log("== 完成 ==");
 console.log(`  身份: ${name} <${email}> / ${department}`);
 console.log(`  上报地址: ${serverUrl}`);
-console.log("  之后开启/结束 Claude Code、以及登录电脑时会自动采集并上传，无需任何操作。");
+console.log("  Claude Code：开启/结束会话即自动采集，无需任何操作。");
+console.log("  Codex：后台每小时自动扫描会话并采集，无需任何操作（无需在 /hooks 里信任）。");

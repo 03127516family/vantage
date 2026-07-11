@@ -4,5 +4,5 @@
 {"timestamp":"2026-07-10T02:00:05.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{}"}}
 {"timestamp":"2026-07-10T02:00:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"好的，我来做"}}
 {"timestamp":"2026-07-10T02:00:12.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch"}}
-{"timestamp":"2026-07-10T02:00:20.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":5000,"cached_input_tokens":1200,"output_tokens":700,"total_tokens":5700}}}}
+{"timestamp":"2026-07-10T02:00:20.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":5000,"cached_input_tokens":1200,"output_tokens":700,"reasoning_output_tokens":50,"total_tokens":5700},"last_token_usage":{"input_tokens":5000,"cached_input_tokens":1200,"output_tokens":700,"reasoning_output_tokens":50,"total_tokens":5700}},"rate_limits":{"primary":{"used_percent":16,"window_minutes":300,"resets_at":1781155911},"secondary":{"used_percent":84,"window_minutes":10080,"resets_at":1781178641},"plan_type":"plus","rate_limit_reached_type":null}}}
 {"timestamp":"2026-07-10T02:00:30.000Z","type":"event_msg","payload":{"type":"agent_message","message":"页面已生成"}}

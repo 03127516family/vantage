@@ -13,6 +13,16 @@ const jsonlPath = join(dataDir, "usage.jsonl");
  * 采集器每次上传的是"这个会话到目前为止的全量"，服务端按 dedupe_key 覆盖，
  * 因此重复触发 / 重试 / 扫描兜底都不会造成重复统计。
  */
+/** 单个模型在一次会话里的用量明细（请求数 + 各类 token）。 */
+export interface ModelUsage {
+  requests?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
+  reasoning_tokens?: number;
+}
+
 export interface UsageRecord {
   // 身份（安装时填写）
   name?: string;
@@ -34,6 +44,17 @@ export interface UsageRecord {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  cache_read_tokens?: number; // 命中缓存的输入 token（成本低）
+  cache_creation_tokens?: number; // 写入缓存的输入 token
+  reasoning_tokens?: number; // 推理 token
+  // 分模型明细：一个会话可能用多个模型，这里按模型分开记（请求数 + 各类 token）。
+  // 保留了模型维度，供服务端还原“按模型统计”，不因聚合到会话而丢失。
+  by_model?: Record<string, ModelUsage>;
+  // 当前用量（额度）——仅 Codex 会话带；used_percent 为“已用百分比”
+  quota_primary_pct?: number | null; // 短窗（Codex 约 5 小时）
+  quota_secondary_pct?: number | null; // 长窗（Codex 每周）
+  quota_plan?: string | null; // 套餐，如 plus
+  quota_reached?: string | null; // 撞到额度墙的类型，null=未撞
   // 内容
   first_prompt?: string;
   summary?: string;

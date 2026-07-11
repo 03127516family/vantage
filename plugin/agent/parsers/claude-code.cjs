@@ -59,9 +59,32 @@ function parseClaudeTranscript(transcriptPath) {
   let toolCalls = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadTokens = 0; // 命中缓存的输入 token
+  let cacheCreationTokens = 0; // 写入缓存的输入 token
   let model = "";
   let firstTs = "";
   let lastTs = "";
+  // 分模型明细：一个会话可能同时用多个模型（主模型 + 子任务/标题用的小模型），
+  // 聚合成单一 model 会丢掉模型维度，这里按模型分开累计（请求数 + 各类 token）。
+  const byModel = {};
+  const accModel = (m, u) => {
+    const k = m || "unknown";
+    const b =
+      byModel[k] ||
+      (byModel[k] = {
+        requests: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        reasoning_tokens: 0,
+      });
+    b.requests += 1;
+    b.input_tokens += Number(u.input_tokens || 0);
+    b.output_tokens += Number(u.output_tokens || 0);
+    b.cache_read_tokens += Number(u.cache_read_input_tokens || 0);
+    b.cache_creation_tokens += Number(u.cache_creation_input_tokens || 0);
+  };
 
   for (const line of lines) {
     if (!line.trim()) continue;
@@ -96,6 +119,9 @@ function parseClaudeTranscript(transcriptPath) {
       if (u) {
         inputTokens += Number(u.input_tokens || 0);
         outputTokens += Number(u.output_tokens || 0);
+        cacheReadTokens += Number(u.cache_read_input_tokens || 0);
+        cacheCreationTokens += Number(u.cache_creation_input_tokens || 0);
+        accModel(o.message.model, u); // 按“本条消息自己的模型”分摊，不用会话末模型
       }
     }
   }
@@ -124,6 +150,15 @@ function parseClaudeTranscript(transcriptPath) {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     total_tokens: inputTokens + outputTokens,
+    cache_read_tokens: cacheReadTokens,
+    cache_creation_tokens: cacheCreationTokens,
+    reasoning_tokens: 0, // Claude 的 usage 不单列推理 token
+    by_model: byModel, // 分模型明细：{ [model]: {requests,input,output,cache_read,cache_creation,reasoning} }
+    // Claude Code 的会话文件不含额度信息，当前用量类字段留空
+    quota_primary_pct: null,
+    quota_secondary_pct: null,
+    quota_plan: null,
+    quota_reached: null,
     first_prompt: truncate(redact(firstPrompt), 300),
     summary,
   };

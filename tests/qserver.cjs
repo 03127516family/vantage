@@ -32,5 +32,12 @@ if (cmd === "count") {
   console.log(r ? JSON.stringify(r) : "MISSING");
 } else if (cmd === "field") {
   const r = recordFor(arg);
-  console.log(r ? r[field] : "MISSING");
+  if (!r) {
+    console.log("MISSING");
+  } else {
+    // 支持点路径（如 by_model.claude-opus-4-8.input_tokens）；末值是对象则输出 JSON。
+    let v = r;
+    for (const seg of field.split(".")) v = v == null ? undefined : v[seg];
+    console.log(v == null ? String(v) : typeof v === "object" ? JSON.stringify(v) : v);
+  }
 }
