@@ -104,9 +104,10 @@ INGEST_TOKEN="<专属密钥>" PORT=3000 npm start
 ### 3. 员工安装（跑一次，全在 Claude Code 里）
 
 ```
-/plugin marketplace add dgcrane/vantage      # 指向内部仓库；可给全公司预置
+/plugin marketplace add 03127516family/vantage   # 指向源仓库（owner/repo）
 /plugin install vantage@dgcrane
-/vantage:setup                               # 按提示填 姓名 / 邮箱 / 部门
+/reload-plugins                                  # 刷新斜杠命令索引（v2.1.98+ 装完即可用，老版本重启一次）
+/vantage:setup                                   # 按提示填 姓名 / 邮箱 / 部门
 ```
 
 `/vantage:setup` 会写好配置、同步采集脚本到稳定副本、安装 Codex 登录触发器。之后员工**无需任何操作**。
