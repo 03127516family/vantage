@@ -2,7 +2,7 @@
 "use strict";
 // Vantage —— 会话扫描/对账（reconcile）。
 // Claude：由 SessionStart 钩子调用（开新会话时兜底补采）；
-// Codex：由定时任务每小时调用（--only codex），增量扫 ~/.codex/sessions 采集（cc-switch 同款思路，免钩子/免信任）。
+// Codex：由 OS 触发器在登录时/每天正午调用（--only codex），增量扫 ~/.codex/sessions 采集（cc-switch 同款思路，免钩子/免信任）。
 // 职责：扫历史会话，把"没采到/断网没传成功"的补上（跳过当前刚开的会话），
 // 顺手清理死信/损坏文件、剪枝 state、触发上传。永远 exit 0、不打印 stdout。
 const fs = require("node:fs");

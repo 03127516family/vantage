@@ -2,7 +2,7 @@
 "use strict";
 // Vantage —— 一次性 setup（由 /vantage:setup 技能调用，跨平台）。
 // 职责：写身份/服务端配置 -> 把 agent 同步到稳定副本 ~/.vantage/agent
-//   -> 安装 Codex 定时扫描触发器（每小时跑 reconcile --only codex，扫 ~/.codex/sessions 增量采集）。
+//   -> 安装 Codex 扫描触发器（登录时 + 每天正午跑 reconcile --only codex，扫 ~/.codex/sessions 增量采集）。
 // Claude Code 的采集钩子由插件自带（hooks.json，装插件即受信任，无需手动操作）；
 // Codex 不用钩子（省去逐人 /hooks 手动信任的门槛，装了即采），改用后台定时扫会话文件（cc-switch 同款思路）。
 // 用法: node setup.cjs <name> <email> <department> [serverUrl] [token]
@@ -14,6 +14,14 @@ const { execFileSync, spawn } = require("node:child_process");
 const BASE_DIR = path.join(os.homedir(), ".vantage");
 const AGENT_SRC = path.join(__dirname, "agent");
 const AGENT_DST = path.join(BASE_DIR, "agent");
+
+// 测试用：写出触发器定义文件但不执行注册命令（launchctl/systemctl/schtasks），
+// 让测试能断言生成内容而不污染真实系统调度器。
+const TRIGGER_DRYRUN = process.env.VANTAGE_TRIGGER_DRYRUN === "1";
+function register(cmd, argv) {
+  if (TRIGGER_DRYRUN) return;
+  execFileSync(cmd, argv, { stdio: "ignore" });
+}
 
 // 管理员在发布插件前把后端地址/密钥填进 vantage.defaults.json，员工便只需填身份。
 function loadDefaults() {
@@ -67,7 +75,9 @@ function syncAgent() {
   console.log(`✓ 已同步 Agent 到稳定副本 ${AGENT_DST}`);
 }
 
-// 安装 Codex 定时扫描触发器：每小时跑一次 reconcile --only codex，增量扫 ~/.codex/sessions。
+// 安装 Codex 扫描触发器：登录时 + 每天正午跑 reconcile --only codex，增量扫 ~/.codex/sessions。
+// 节奏依据：消费端是周一晨会看上周，数据当天到即可；每天两个触发点留足失败容错，
+// 比每小时省 20+ 次无谓唤醒，比每周一次多 6 天的补采机会。
 // 指向稳定路径 ~/.vantage/agent（插件升级换目录也不失效）。分平台用 launchd/systemd/schtasks。
 function installTrigger() {
   if (process.env.VANTAGE_SKIP_TRIGGER === "1") {
@@ -104,24 +114,25 @@ function installLaunchd(node, reconcile) {
     <string>--only</string><string>codex</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>StartInterval</key><integer>3600</integer>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
 </dict></plist>
 `
   );
   const domain = `gui/${process.getuid()}`;
   try {
-    execFileSync("launchctl", ["bootout", `${domain}/${label}`], { stdio: "ignore" });
+    register("launchctl", ["bootout", `${domain}/${label}`]);
   } catch {
     /* 未加载过，忽略 */
   }
-  execFileSync("launchctl", ["bootstrap", domain, plist], { stdio: "ignore" });
-  console.log("✓ 已安装 Codex 定时扫描（LaunchAgent，每小时 + 登录时，升级安全）");
+  register("launchctl", ["bootstrap", domain, plist]);
+  console.log("✓ 已安装 Codex 扫描触发器（LaunchAgent，登录时 + 每天正午，升级安全）");
 }
 
 function installSystemd(node, reconcile) {
   const dir = path.join(os.homedir(), ".config", "systemd", "user");
   fs.mkdirSync(dir, { recursive: true });
-  // oneshot 服务负责跑一次扫描；timer 每小时拉起它。
+  // oneshot 服务负责跑一次扫描；timer 在开机后和每天正午拉起它（错过则补跑）。
   fs.writeFileSync(
     path.join(dir, "vantage-codex.service"),
     `[Unit]
@@ -134,38 +145,41 @@ ExecStart=${node} ${reconcile} --only codex
   fs.writeFileSync(
     path.join(dir, "vantage-codex.timer"),
     `[Unit]
-Description=Vantage - 每小时扫描 Codex 会话
+Description=Vantage - 开机及每天正午扫描 Codex 会话
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=1h
+OnCalendar=*-*-* 12:00:00
 Persistent=true
 [Install]
 WantedBy=timers.target
 `
   );
-  execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
-  execFileSync("systemctl", ["--user", "enable", "--now", "vantage-codex.timer"], {
-    stdio: "ignore",
-  });
-  console.log("✓ 已安装 Codex 定时扫描（systemd timer，每小时，升级安全）");
+  register("systemctl", ["--user", "daemon-reload"]);
+  register("systemctl", ["--user", "enable", "--now", "vantage-codex.timer"]);
+  console.log("✓ 已安装 Codex 扫描触发器（systemd timer，开机 + 每天正午，升级安全）");
 }
 
 function installSchtasks(node, reconcile) {
-  execFileSync(
-    "schtasks",
-    [
-      "/Create",
-      "/TN",
-      "VantageCodexReconcile",
-      "/SC",
-      "HOURLY",
-      "/TR",
-      `"${node}" "${reconcile}" --only codex`,
-      "/F",
-    ],
-    { stdio: "ignore" }
+  // 用 wscript+VBS 隐藏窗口启动：schtasks 直接跑 node.exe 会每次弹一个 cmd 黑窗，
+  // 员工看到莫名闪窗易误判为病毒。VBS 的 Run(..., 0) 表示不显示窗口。
+  const vbs = path.join(BASE_DIR, "run-reconcile.vbs");
+  fs.writeFileSync(
+    vbs,
+    `CreateObject("WScript.Shell").Run """${node}"" ""${reconcile}"" --only codex", 0, False\r\n`
   );
-  console.log("✓ 已安装 Codex 定时扫描（计划任务，每小时，升级安全）");
+  // 两条任务：登录时（开机主触发）+ 每天正午（长期不注销的挂机兜底）。
+  const tr = `wscript.exe "${vbs}"`;
+  register("schtasks", ["/Create", "/TN", "VantageCodexLogon", "/SC", "ONLOGON", "/TR", tr, "/F"]);
+  register("schtasks", [
+    "/Create", "/TN", "VantageCodexDaily", "/SC", "DAILY", "/ST", "12:00", "/TR", tr, "/F",
+  ]);
+  // 清理旧版遗留的每小时任务（不存在则忽略）
+  try {
+    register("schtasks", ["/Delete", "/TN", "VantageCodexReconcile", "/F"]);
+  } catch {
+    /* 旧任务不存在 */
+  }
+  console.log("✓ 已安装 Codex 扫描触发器（计划任务，登录时 + 每天正午，隐藏窗口，升级安全）");
 }
 
 console.log("== Vantage setup ==");
@@ -179,8 +193,8 @@ installTrigger();
 
 // 写完身份立刻后台跑一次对账（除非显式跳过 setup 期副作用，如测试）：
 // 把历史会话（含 setup 前以空身份采的）按新身份重传，服务端 upsert 覆盖，
-// 看板马上能看到正确归属，不必等下次开会话 / 每小时定时。
-if (process.env.VANTAGE_SKIP_TRIGGER !== "1") {
+// 看板马上能看到正确归属，不必等下次开会话 / 下个触发点。
+if (process.env.VANTAGE_SKIP_TRIGGER !== "1" && !TRIGGER_DRYRUN) {
   try {
     const child = spawn(process.execPath, [path.join(AGENT_DST, "reconcile.cjs")], {
       detached: true,
@@ -198,4 +212,4 @@ console.log("== 完成 ==");
 console.log(`  身份: ${name} <${email}> / ${department}`);
 console.log(`  上报地址: ${serverUrl}`);
 console.log("  Claude Code：开启/结束会话即自动采集，无需任何操作。");
-console.log("  Codex：后台每小时自动扫描会话并采集，无需任何操作（无需在 /hooks 里信任）。");
+console.log("  Codex：登录时及每天正午自动扫描会话并采集，无需任何操作（无需在 /hooks 里信任）。");

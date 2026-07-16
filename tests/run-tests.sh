@@ -234,6 +234,22 @@ echo "{\"hook_event_name\":\"SessionStart\"}" | HOME="$SB6" node "$AGENT/reconci
 assert "T21 --only 先跑后旧会话仍重打身份=孙八" "孙八" "$(spool_name6)"
 
 echo ""
+echo "== T22: 触发器为每天登录时+正午兜底,不再每小时（贴合周会消费节奏）=="
+# DRYRUN 写出定义文件但不注册进系统调度器；仅断言当前平台的产物。
+SB7="$WORK/home7"; mkdir -p "$SB7/.vantage"
+HOME="$SB7" VANTAGE_TRIGGER_DRYRUN=1 node "$REPO/plugin/setup.cjs" "周九" "zhou@example.com" "研发部" "http://localhost:59999" "x" >/dev/null 2>&1
+if [ "$(uname)" = "Darwin" ]; then
+  PLIST="$SB7/Library/LaunchAgents/com.dgcrane.vantage.codex.plist"
+  grep -q "StartCalendarInterval" "$PLIST" 2>/dev/null && ok "T22 plist 含正午日程" || no "T22 正午日程" "StartCalendarInterval" "无"
+  grep -q "RunAtLoad" "$PLIST" 2>/dev/null && ok "T22 plist 含登录触发" || no "T22 登录触发" "RunAtLoad" "无"
+  ! grep -q "StartInterval" "$PLIST" 2>/dev/null && ok "T22 已移除每小时间隔" || no "T22 每小时应移除" "无 StartInterval" "仍存在"
+elif [ "$(uname)" = "Linux" ]; then
+  TIMER="$SB7/.config/systemd/user/vantage-codex.timer"
+  grep -q "OnCalendar=" "$TIMER" 2>/dev/null && ok "T22 timer 含正午日程" || no "T22 正午日程" "OnCalendar" "无"
+  ! grep -q "OnUnitActiveSec" "$TIMER" 2>/dev/null && ok "T22 已移除每小时间隔" || no "T22 每小时应移除" "无 OnUnitActiveSec" "仍存在"
+fi
+
+echo ""
 echo "======================================================"
 echo " 结果: PASS=$PASS  FAIL=$FAIL"
 echo "======================================================"
