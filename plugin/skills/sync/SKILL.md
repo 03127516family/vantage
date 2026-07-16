@@ -1,6 +1,6 @@
 ---
 name: sync
-description: 手动同步一次用量数据：立即扫描 Claude Code / Codex 的本地会话并上报到公司内网（平时后台自动进行，本命令用于「现在就要看到最新数据」或排查数据没到的情况）。
+description: 手动同步一次用量数据：立即扫描 Claude Code / Codex 的本地会话并上传到公司的用量统计服务器（平时后台自动进行，本命令用于「现在就要看到最新数据」或排查数据没到的情况）。
 disable-model-invocation: false
 ---
 
