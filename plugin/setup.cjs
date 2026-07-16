@@ -9,7 +9,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
 
 const BASE_DIR = path.join(os.homedir(), ".vantage");
 const AGENT_SRC = path.join(__dirname, "agent");
@@ -176,6 +176,23 @@ if (!name || !email || !department) {
 writeConfig();
 syncAgent();
 installTrigger();
+
+// 写完身份立刻后台跑一次对账（除非显式跳过 setup 期副作用，如测试）：
+// 把历史会话（含 setup 前以空身份采的）按新身份重传，服务端 upsert 覆盖，
+// 看板马上能看到正确归属，不必等下次开会话 / 每小时定时。
+if (process.env.VANTAGE_SKIP_TRIGGER !== "1") {
+  try {
+    const child = spawn(process.execPath, [path.join(AGENT_DST, "reconcile.cjs")], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    console.log("✓ 已触发首次对账（后台用新身份补采历史会话）");
+  } catch (e) {
+    console.log(`！首次对账触发失败（不影响后续自动采集）：${e.message}`);
+  }
+}
+
 console.log("");
 console.log("== 完成 ==");
 console.log(`  身份: ${name} <${email}> / ${department}`);

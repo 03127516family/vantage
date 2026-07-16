@@ -184,6 +184,56 @@ mstat(){ echo "$STATS" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("
 [ "$(mstat claude-opus-4-8 requests)" != "MISSING" ] && ok "T18 model_stats 含 opus" || no "T18 model_stats opus" "存在" "MISSING"
 
 echo ""
+echo "== T19: 先用后 setup -> 旧会话自动重打身份（不再卡机器名）=="
+# 复现线上 bug：未 setup 就用 -> 会话以空身份采集、被 /stats 当成机器名；
+# 之后才 setup，旧会话身份卡死传不出去。修复后 reconcile 检测到身份变更 -> 用新身份重传覆盖。
+SB4="$WORK/home4"; SPOOL4="$SB4/.vantage/spool"
+mkdir -p "$SB4/.claude/projects/proj" "$SB4/.vantage"
+cp "$FIX/claude/$S1.jsonl" "$SB4/.claude/projects/proj/"
+spool_name4(){ node -e 'const fs=require("fs");try{process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1])).name||"")}catch{process.stdout.write("NOSPOOL")}' "$SPOOL4/claude-code_$1.json"; }
+# 1) 未配置身份（只有死地址，防 flush 把样本传走）-> SessionEnd 采到空身份
+echo '{"server_url":"http://localhost:59999","token":"x"}' > "$SB4/.vantage/config.json"
+echo "{\"session_id\":\"$S1\",\"transcript_path\":\"$SB4/.claude/projects/proj/$S1.jsonl\",\"hook_event_name\":\"SessionEnd\",\"exit_reason\":\"logout\"}" | HOME="$SB4" node "$AGENT/capture.cjs"; sleep 0.4
+assert "T19 setup 前采到空身份" "" "$(spool_name4 "$S1")"
+# 2) 之后才 setup：写真实身份，installed_at=现在（会话 mtime 早于安装，复现"装前会话"）
+node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({name:"孙八",email:"sun@example.com",department:"研发部",server_url:"http://localhost:59999",token:"x",installed_at:new Date().toISOString()}))' "$SB4/.vantage/config.json"
+# 3) reconcile 检测身份变更 -> 重扫最近会话 -> 用新身份重写 spool
+echo "{\"hook_event_name\":\"SessionStart\"}" | HOME="$SB4" node "$AGENT/reconcile.cjs"; sleep 0.6
+assert "T19 setup 后旧会话重打身份=孙八" "孙八" "$(spool_name4 "$S1")"
+
+echo ""
+echo "== T20: 身份变更不倒灌装前个人历史（从没采过的不重传）=="
+# 纠偏只针对"已采过、身份错了"的会话；装插件前就存在、从未采集过的个人历史，
+# 即使身份变更（含首次 setup）也必须继续被 installed_at 闸口挡住。
+SB5="$WORK/home5"; SPOOL5="$SB5/.vantage/spool"
+mkdir -p "$SB5/.claude/projects/proj" "$SB5/.vantage"
+cp "$FIX/claude/$S2.jsonl" "$SB5/.claude/projects/proj/"
+sleep 0.2
+# 直接首次 setup（installed_at=现在 > 会话 mtime），期间从未采集过 S2
+node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({name:"孙八",email:"sun@example.com",department:"研发部",server_url:"http://localhost:59999",token:"x",installed_at:new Date().toISOString()}))' "$SB5/.vantage/config.json"
+echo "{\"hook_event_name\":\"SessionStart\"}" | HOME="$SB5" node "$AGENT/reconcile.cjs"; sleep 0.6
+[ ! -f "$SPOOL5/claude-code_$S2.json" ] && ok "T20 装前历史未被采集" || no "T20 不应采集装前历史" "无 spool" "被采了"
+
+echo ""
+echo "== T21: --only codex 不消耗身份标记（launchd RunAtLoad 先跑也不丢纠偏）=="
+# setup 里 installTrigger 在 spawn 全量对账之前，launchd RunAtLoad 会立刻跑 --only codex。
+# 若这次单源扫描消耗了身份变更标记，另一数据源里卡空身份的会话就永远等不到重传。
+SB6="$WORK/home6"; SPOOL6="$SB6/.vantage/spool"
+mkdir -p "$SB6/.claude/projects/proj" "$SB6/.vantage"
+cp "$FIX/claude/$S1.jsonl" "$SB6/.claude/projects/proj/"
+spool_name6(){ node -e 'const fs=require("fs");try{process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1])).name||"")}catch{process.stdout.write("NOSPOOL")}' "$SPOOL6/claude-code_$S1.json"; }
+# 1) 空身份下采到 S1（死地址防传走）
+echo '{"server_url":"http://localhost:59999","token":"x"}' > "$SB6/.vantage/config.json"
+echo "{\"session_id\":\"$S1\",\"transcript_path\":\"$SB6/.claude/projects/proj/$S1.jsonl\",\"hook_event_name\":\"SessionEnd\",\"exit_reason\":\"logout\"}" | HOME="$SB6" node "$AGENT/capture.cjs"; sleep 0.4
+# 2) 之后 setup 写真实身份
+node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({name:"孙八",email:"sun@example.com",department:"研发部",server_url:"http://localhost:59999",token:"x",installed_at:new Date().toISOString()}))' "$SB6/.vantage/config.json"
+# 3) 模拟 launchd RunAtLoad：--only codex 先跑
+HOME="$SB6" node "$AGENT/reconcile.cjs" --only codex >/dev/null 2>&1; sleep 0.4
+# 4) 随后 setup 后台触发的全量对账才跑
+echo "{\"hook_event_name\":\"SessionStart\"}" | HOME="$SB6" node "$AGENT/reconcile.cjs"; sleep 0.6
+assert "T21 --only 先跑后旧会话仍重打身份=孙八" "孙八" "$(spool_name6)"
+
+echo ""
 echo "======================================================"
 echo " 结果: PASS=$PASS  FAIL=$FAIL"
 echo "======================================================"

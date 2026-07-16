@@ -120,12 +120,39 @@ async function main() {
 
   syncStableCopy(); // 从插件目录运行时，刷新 Codex 用的稳定副本
 
+  // 身份变更检测：setup 改了 name/email/department 后（含"从未配置 -> 首次配置"），
+  // 把"已采过"的会话标记清空并记入 restamp 集合，强制本轮用新身份重传——服务端按
+  // session_id upsert 覆盖，旧记录自动拿到正确身份。修"先用了再 setup，身份卡死成机器名"。
+  // 只在全量扫描时做：--only 单源扫描（如 launchd RunAtLoad 的 --only codex）若消耗了
+  // 这个标记，另一数据源里卡空身份的会话就永远等不到重传。
+  const restamp = new Set();
+  if (!only) {
+    const idKey = JSON.stringify([cfg.name || "", cfg.email || "", cfg.department || ""]);
+    const state = core.readState();
+    const prev = state.__identity__ ?? "";
+    if (prev !== idKey) {
+      for (const k of Object.keys(state)) {
+        if (k !== "__identity__") {
+          delete state[k];
+          restamp.add(k);
+        }
+      }
+      state.__identity__ = idKey;
+      core.writeState(state);
+      core.log(`identity changed -> re-stamp ${restamp.size} prior session(s) with new identity`);
+    }
+  }
+
   // 扫描下限：取"最近 N 天"和"安装时刻"中更晚的——安装后只采装后的会话，不倒灌历史。
+  // 例外：restamp 集合里的文件（确实被采过、身份错了的）放宽到"最近 N 天"，
+  // 即使 mtime 早于 installed_at 也重传纠偏；从没采过的装前个人历史仍被闸口挡住。
   const recentCutoff = Date.now() - RECENT_DAYS * 86400 * 1000;
   const installCutoff = cfg.installed_at ? Date.parse(cfg.installed_at) : 0;
   const cutoff = Math.max(recentCutoff, Number.isNaN(installCutoff) ? 0 : installCutoff);
   cleanupOld();
-  core.pruneState(cutoff); // 剪掉早于回看窗口的 state 条目，防止无限增长
+  // 剪 state 只按回看窗口，不掺 installed_at：装前会话的"已采"标记是纠偏的证据，
+  // 若被 --only 单源扫描按安装闸口剪掉，后续身份变更就无从知道它该重传。
+  core.pruneState(recentCutoff);
 
   let totalFiles = 0;
   let swept = 0;
@@ -139,7 +166,8 @@ async function main() {
       } catch {
         continue;
       }
-      if (st.mtimeMs < cutoff) continue; // 太老，跳过
+      const fileCutoff = restamp.has(file) ? recentCutoff : cutoff;
+      if (st.mtimeMs < fileCutoff) continue; // 太老，跳过
       if (currentSessionId && file.includes(currentSessionId)) continue; // 跳过当前会话
       if (!core.hasChanged(file, st.size, st.mtimeMs)) continue; // 没变，已同步过
 
