@@ -20,6 +20,10 @@ export interface ModelUsage {
   output_tokens?: number;
   cache_read_tokens?: number;
   cache_creation_tokens?: number;
+  // 缓存写入分档（算成本用：5 分钟档 1.25 倍 input 单价，1 小时档 2 倍）。
+  // 老记录无此字段；总数 - (5m+1h) 的差值视为"未知档"按 1.25 估算。
+  cache_creation_5m_tokens?: number;
+  cache_creation_1h_tokens?: number;
   reasoning_tokens?: number;
 }
 
@@ -45,7 +49,9 @@ export interface UsageRecord {
   output_tokens?: number;
   total_tokens?: number;
   cache_read_tokens?: number; // 命中缓存的输入 token（成本低）
-  cache_creation_tokens?: number; // 写入缓存的输入 token
+  cache_creation_tokens?: number; // 写入缓存的输入 token（总数）
+  cache_creation_5m_tokens?: number; // 其中 5 分钟档（1.25 倍计价）
+  cache_creation_1h_tokens?: number; // 其中 1 小时档（2 倍计价）
   reasoning_tokens?: number; // 推理 token
   // 分模型明细：一个会话可能用多个模型，这里按模型分开记（请求数 + 各类 token）。
   // 保留了模型维度，供服务端还原“按模型统计”，不因聚合到会话而丢失。

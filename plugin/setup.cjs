@@ -5,7 +5,9 @@
 //   -> 安装 Codex 扫描触发器（登录时 + 每天正午跑 reconcile --only codex，扫 ~/.codex/sessions 增量采集）。
 // Claude Code 的采集钩子由插件自带（hooks.json，装插件即受信任，无需手动操作）；
 // Codex 不用钩子（省去逐人 /hooks 手动信任的门槛，装了即采），改用后台定时扫会话文件（cc-switch 同款思路）。
-// 用法: node setup.cjs <name> <email> <department> [serverUrl] [token]
+// 用法: node setup.cjs <name> [department] [serverUrl] [token]
+//   部门通常不用传：脚本按姓名查内置花名册 roster.json 自动填（防手填乱写）。
+//   姓名不在册且没传部门 -> 退出码 2 并打印候选名，由 setup 技能引导用户确认。
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -33,14 +35,66 @@ function loadDefaults() {
 }
 const defaults = loadDefaults();
 
-const [name = "", email = "", department = ""] = process.argv.slice(2);
+const [name = "", deptArg = ""] = process.argv.slice(2);
 // 优先级：命令行参数 > 环境变量 > 插件内置默认 > 兜底
 const serverUrl =
-  process.argv[5] || process.env.VANTAGE_SERVER || defaults.server_url || "http://localhost:3000";
+  process.argv[4] || process.env.VANTAGE_SERVER || defaults.server_url || "http://localhost:3000";
 const token =
-  process.argv[6] || process.env.VANTAGE_TOKEN || defaults.token || "dev-token-change-me";
+  process.argv[5] || process.env.VANTAGE_TOKEN || defaults.token || "dev-token-change-me";
 
-function writeConfig() {
+// 公司花名册（由通讯录生成）：姓名 -> 部门。缺文件时退化为纯手填模式。
+function loadRoster() {
+  try {
+    const r = JSON.parse(fs.readFileSync(path.join(__dirname, "roster.json"), "utf8"));
+    return Array.isArray(r.people) ? r.people : [];
+  } catch {
+    return [];
+  }
+}
+
+// 编辑距离（花名册重名纠错用；中文名短，距离≤1 即视为疑似笔误）
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      d[i][j] = Math.min(
+        d[i - 1][j] + 1,
+        d[i][j - 1] + 1,
+        d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+  return d[m][n];
+}
+
+// 按姓名定部门：在册 -> 以花名册为准（手填部门无效，防乱写）；
+// 不在册 -> 必须显式传部门（新员工路径），否则退出码 2 并给出候选名。
+function resolveDepartment(inputName, inputDept) {
+  const roster = loadRoster();
+  const hit = roster.find((p) => p.name === inputName);
+  if (hit) {
+    if (inputDept && inputDept !== hit.department) {
+      console.log(`· 部门以公司通讯录为准：${hit.department}（忽略传入的「${inputDept}」）`);
+    }
+    return hit.department;
+  }
+  if (inputDept) {
+    console.log(`· 「${inputName}」不在通讯录中，按手填部门登记：${inputDept}`);
+    return inputDept;
+  }
+  // 候选：疑似笔误（编辑距离≤1）优先，其次同姓，最多 5 个
+  const near = roster.filter((p) => editDistance(p.name, inputName) <= 1).map((p) => p.name);
+  const sameSurname = roster
+    .filter((p) => p.name[0] === inputName[0] && !near.includes(p.name))
+    .map((p) => p.name);
+  const cand = [...near, ...sameSurname].slice(0, 5);
+  console.log(`！「${inputName}」不在公司通讯录中。`);
+  if (cand.length) console.log(`  是不是想填：${cand.join(" / ")}`);
+  console.log("  请核对姓名后重试；确为新员工时手动指定部门：node setup.cjs <姓名> <部门>");
+  process.exit(2);
+}
+
+function writeConfig(department) {
   fs.mkdirSync(BASE_DIR, { recursive: true });
   const p = path.join(BASE_DIR, "config.json");
   // 保留已有的 installed_at（重装不改初装时刻）；首次安装才写入。
@@ -54,7 +108,7 @@ function writeConfig() {
   fs.writeFileSync(
     p,
     JSON.stringify(
-      { name, email, department, server_url: serverUrl, token, installed_at: installedAt },
+      { name, department, server_url: serverUrl, token, installed_at: installedAt },
       null,
       2
     ) + "\n",
@@ -183,11 +237,16 @@ function installSchtasks(node, reconcile) {
 }
 
 console.log("== Vantage setup ==");
-if (!name || !email || !department) {
-  console.log("！缺少身份参数。用法: node setup.cjs <姓名> <邮箱> <部门> [server] [token]");
+if (!name) {
+  console.log("！缺少姓名。用法: node setup.cjs <姓名> [部门] [server] [token]");
   process.exit(1);
 }
-writeConfig();
+if (deptArg.includes("@")) {
+  console.log("！第二个参数应是部门（现在不再登记邮箱）。用法: node setup.cjs <姓名> [部门]");
+  process.exit(1);
+}
+const department = resolveDepartment(name, deptArg);
+writeConfig(department);
 syncAgent();
 installTrigger();
 
@@ -209,7 +268,7 @@ if (process.env.VANTAGE_SKIP_TRIGGER !== "1" && !TRIGGER_DRYRUN) {
 
 console.log("");
 console.log("== 完成 ==");
-console.log(`  身份: ${name} <${email}> / ${department}`);
+console.log(`  身份: ${name} / ${department}`);
 console.log(`  上报地址: ${serverUrl}`);
 console.log("  Claude Code：开启/结束会话即自动采集，无需任何操作。");
 console.log("  Codex：登录时及每天正午自动扫描会话并采集，无需任何操作（无需在 /hooks 里信任）。");

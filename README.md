@@ -52,6 +52,9 @@ vantage/
 │   ├── skills/setup/SKILL.md     #   /vantage:setup 命令
 │   ├── setup.cjs                 #   跨平台 setup：写配置 + 同步 agent + 装 Codex 触发器
 │   ├── vantage.defaults.json     #   管理员预置后端地址/密钥（员工无需填）
+│   ├── roster.json               #   公司花名册（姓名→部门，setup 自动填部门用；由通讯录生成）
+├── tools/
+│   └── gen-roster.cjs            # 花名册生成器：node tools/gen-roster.cjs <通讯录.xlsx>（人员变动时重跑）
 │   └── agent/                    #   采集脚本（零依赖纯 Node）
 │       ├── core.cjs              #     共享核心：配置/原子写/spool/state/HTTP/脱敏/进程
 │       ├── parsers/{claude-code,codex}.cjs
@@ -71,7 +74,7 @@ vantage/
 
 | 类别 | 字段 |
 |---|---|
-| 身份 | 姓名、邮箱、部门、主机名（setup 时填一次） |
+| 身份 | 姓名、部门、主机名（setup 时只填姓名，部门按公司通讯录自动填；不登记邮箱） |
 | 会话 | 工具、session_id、项目路径、开始/结束时间、时长 |
 | 用量 | 用户消息数、助手消息数、工具调用数、输入/输出/合计 token、分模型明细、使用的模型 |
 | 额度 | Codex 当前额度使用率（5 小时/周）、套餐类型（Claude 无此数据则留空） |
@@ -109,7 +112,7 @@ INGEST_TOKEN="<专属密钥>" PORT=3000 npm start
 /plugin marketplace add 03127516family/vantage   # 指向源仓库（owner/repo）
 /plugin install vantage@dgcrane
 /reload-plugins                                  # 刷新斜杠命令索引（v2.1.98+ 装完即可用，老版本重启一次）
-/vantage:setup                                   # 按提示填 姓名 / 邮箱 / 部门
+/vantage:setup                                   # 按提示填姓名即可（部门按公司通讯录自动填）
 ```
 
 `/vantage:setup` 会写好配置、同步采集脚本到稳定副本、安装 Codex 登录触发器。之后员工**无需任何操作**。
@@ -144,7 +147,7 @@ curl -s -H "Authorization: Bearer <密钥>" http://localhost:3000/stats
 **员工机器** `~/.vantage/config.json`（setup 以 0600 权限生成）
 
 ```json
-{ "name": "张三", "email": "zhangsan@dgcrane.com", "department": "研发部",
+{ "name": "张三", "department": "外贸部",
   "server_url": "https://vantage.dgcrane.com", "token": "<密钥>" }
 ```
 

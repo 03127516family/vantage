@@ -60,7 +60,13 @@ function parseClaudeTranscript(transcriptPath) {
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadTokens = 0; // 命中缓存的输入 token
-  let cacheCreationTokens = 0; // 写入缓存的输入 token
+  let cacheCreationTokens = 0; // 写入缓存的输入 token(总数,老格式只有它)
+  // 缓存写入分档明细:5 分钟档按 input 单价 1.25 倍计费,1 小时档按 2 倍。
+  // usage.cache_creation 里有拆分(ephemeral_5m/1h_input_tokens);只取总数会让
+  // 服务端算成本时只能猜倍率(最多低估 60%)。老 transcript 无此字段则两项为 0,
+  // 服务端可用 总数-(5m+1h) 识别出"未知档"部分做估算。
+  let cache5mTokens = 0;
+  let cache1hTokens = 0;
   let model = "";
   let firstTs = "";
   let lastTs = "";
@@ -77,6 +83,8 @@ function parseClaudeTranscript(transcriptPath) {
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
+        cache_creation_5m_tokens: 0,
+        cache_creation_1h_tokens: 0,
         reasoning_tokens: 0,
       });
     b.requests += 1;
@@ -84,6 +92,9 @@ function parseClaudeTranscript(transcriptPath) {
     b.output_tokens += Number(u.output_tokens || 0);
     b.cache_read_tokens += Number(u.cache_read_input_tokens || 0);
     b.cache_creation_tokens += Number(u.cache_creation_input_tokens || 0);
+    const cc = u.cache_creation || {};
+    b.cache_creation_5m_tokens += Number(cc.ephemeral_5m_input_tokens || 0);
+    b.cache_creation_1h_tokens += Number(cc.ephemeral_1h_input_tokens || 0);
   };
 
   for (const line of lines) {
@@ -121,6 +132,9 @@ function parseClaudeTranscript(transcriptPath) {
         outputTokens += Number(u.output_tokens || 0);
         cacheReadTokens += Number(u.cache_read_input_tokens || 0);
         cacheCreationTokens += Number(u.cache_creation_input_tokens || 0);
+        const cc = u.cache_creation || {};
+        cache5mTokens += Number(cc.ephemeral_5m_input_tokens || 0);
+        cache1hTokens += Number(cc.ephemeral_1h_input_tokens || 0);
         accModel(o.message.model, u); // 按“本条消息自己的模型”分摊，不用会话末模型
       }
     }
@@ -152,6 +166,8 @@ function parseClaudeTranscript(transcriptPath) {
     total_tokens: inputTokens + outputTokens,
     cache_read_tokens: cacheReadTokens,
     cache_creation_tokens: cacheCreationTokens,
+    cache_creation_5m_tokens: cache5mTokens, // 1.25 倍档
+    cache_creation_1h_tokens: cache1hTokens, // 2 倍档
     reasoning_tokens: 0, // Claude 的 usage 不单列推理 token
     by_model: byModel, // 分模型明细：{ [model]: {requests,input,output,cache_read,cache_creation,reasoning} }
     // Claude Code 的会话文件不含额度信息，当前用量类字段留空

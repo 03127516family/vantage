@@ -1,0 +1,448 @@
+{
+  "_comment": "由公司通讯录生成(全员表);setup.cjs 用它做 姓名→部门 自动填充。人员变动时用 tools/gen-roster.cjs 重新生成。",
+  "company": "德工机械",
+  "source": "德工机械通讯录.xlsx",
+  "generated_at": "2026-07-16",
+  "people": [
+    {
+      "name": "李栋",
+      "department": "外贸部"
+    },
+    {
+      "name": "杜同周",
+      "department": "外贸部"
+    },
+    {
+      "name": "杨广图",
+      "department": "市场部"
+    },
+    {
+      "name": "孙涛",
+      "department": "外贸部"
+    },
+    {
+      "name": "王聪",
+      "department": "财务部"
+    },
+    {
+      "name": "王方方",
+      "department": "财务部"
+    },
+    {
+      "name": "窦素芳",
+      "department": "财务部"
+    },
+    {
+      "name": "朱佳慧",
+      "department": "财务部"
+    },
+    {
+      "name": "唐伟娜",
+      "department": "财务部"
+    },
+    {
+      "name": "张文洁",
+      "department": "财务部"
+    },
+    {
+      "name": "徐志远",
+      "department": "技术部"
+    },
+    {
+      "name": "齐英杰",
+      "department": "技术部"
+    },
+    {
+      "name": "许芳芳",
+      "department": "技术部"
+    },
+    {
+      "name": "闫晓妮",
+      "department": "技术部"
+    },
+    {
+      "name": "向焕意",
+      "department": "技术部"
+    },
+    {
+      "name": "薛文敬",
+      "department": "技术部"
+    },
+    {
+      "name": "张波",
+      "department": "行政部"
+    },
+    {
+      "name": "刘云飞",
+      "department": "行政部"
+    },
+    {
+      "name": "张思思",
+      "department": "行政部"
+    },
+    {
+      "name": "李富珍",
+      "department": "行政部"
+    },
+    {
+      "name": "张沛",
+      "department": "外贸部"
+    },
+    {
+      "name": "冯丹",
+      "department": "外贸部"
+    },
+    {
+      "name": "谷春晓",
+      "department": "外贸部"
+    },
+    {
+      "name": "党照阳",
+      "department": "外贸部"
+    },
+    {
+      "name": "吴小闯",
+      "department": "外贸部"
+    },
+    {
+      "name": "赵璐娟",
+      "department": "外贸部"
+    },
+    {
+      "name": "杨真真",
+      "department": "外贸部"
+    },
+    {
+      "name": "娄坤",
+      "department": "外贸部"
+    },
+    {
+      "name": "吴心雨",
+      "department": "外贸部"
+    },
+    {
+      "name": "李志娟",
+      "department": "外贸部"
+    },
+    {
+      "name": "张芳",
+      "department": "外贸部"
+    },
+    {
+      "name": "杨晓晨",
+      "department": "外贸部"
+    },
+    {
+      "name": "李卓儒",
+      "department": "外贸部"
+    },
+    {
+      "name": "姬淑珍",
+      "department": "外贸部"
+    },
+    {
+      "name": "靳婧姝",
+      "department": "外贸部"
+    },
+    {
+      "name": "娄莹莹",
+      "department": "外贸部"
+    },
+    {
+      "name": "王广瑞",
+      "department": "外贸部"
+    },
+    {
+      "name": "余长海",
+      "department": "外贸部"
+    },
+    {
+      "name": "李成洋",
+      "department": "外贸部"
+    },
+    {
+      "name": "杨洁敏",
+      "department": "外贸部"
+    },
+    {
+      "name": "张晴",
+      "department": "外贸部"
+    },
+    {
+      "name": "李伟枝",
+      "department": "外贸部"
+    },
+    {
+      "name": "刘佳豪",
+      "department": "外贸部"
+    },
+    {
+      "name": "王瑞华",
+      "department": "外贸部"
+    },
+    {
+      "name": "马安欣",
+      "department": "外贸部"
+    },
+    {
+      "name": "刘华",
+      "department": "外贸部"
+    },
+    {
+      "name": "李卓嵘",
+      "department": "外贸部"
+    },
+    {
+      "name": "闫金金",
+      "department": "外贸部"
+    },
+    {
+      "name": "席海莉",
+      "department": "外贸部"
+    },
+    {
+      "name": "曹祖聪",
+      "department": "外贸部"
+    },
+    {
+      "name": "张亚平",
+      "department": "外贸部"
+    },
+    {
+      "name": "李明芳",
+      "department": "外贸部"
+    },
+    {
+      "name": "宗翠萍",
+      "department": "外贸部"
+    },
+    {
+      "name": "闫梦雨",
+      "department": "外贸部"
+    },
+    {
+      "name": "胡生栋",
+      "department": "外贸部"
+    },
+    {
+      "name": "方枝",
+      "department": "外贸部"
+    },
+    {
+      "name": "杨玉倩",
+      "department": "外贸部"
+    },
+    {
+      "name": "吕志刚",
+      "department": "外贸部"
+    },
+    {
+      "name": "郑莎莎",
+      "department": "外贸部"
+    },
+    {
+      "name": "申磊",
+      "department": "外贸部"
+    },
+    {
+      "name": "李彬彬",
+      "department": "外贸部"
+    },
+    {
+      "name": "孔伊慧",
+      "department": "外贸部"
+    },
+    {
+      "name": "靳琇",
+      "department": "外贸部"
+    },
+    {
+      "name": "丁彗星",
+      "department": "外贸部"
+    },
+    {
+      "name": "刘配轩",
+      "department": "外贸部"
+    },
+    {
+      "name": "王格格",
+      "department": "外贸部"
+    },
+    {
+      "name": "王洁",
+      "department": "外贸部"
+    },
+    {
+      "name": "李静怡",
+      "department": "外贸部"
+    },
+    {
+      "name": "刘志伟",
+      "department": "外贸部"
+    },
+    {
+      "name": "张扬",
+      "department": "外贸部"
+    },
+    {
+      "name": "赵炜易",
+      "department": "外贸部"
+    },
+    {
+      "name": "杜习营",
+      "department": "外贸部"
+    },
+    {
+      "name": "李梦",
+      "department": "外贸部"
+    },
+    {
+      "name": "王雪蔓",
+      "department": "外贸部"
+    },
+    {
+      "name": "杜习康",
+      "department": "外贸部"
+    },
+    {
+      "name": "郭少洁",
+      "department": "外贸部"
+    },
+    {
+      "name": "杨晶伊",
+      "department": "外贸部"
+    },
+    {
+      "name": "申珊",
+      "department": "外贸部"
+    },
+    {
+      "name": "马兴祯",
+      "department": "外贸部"
+    },
+    {
+      "name": "侯朝武",
+      "department": "市场部"
+    },
+    {
+      "name": "李少文",
+      "department": "市场部"
+    },
+    {
+      "name": "赵辉",
+      "department": "市场部"
+    },
+    {
+      "name": "陈新新",
+      "department": "市场部"
+    },
+    {
+      "name": "程鑫",
+      "department": "市场部"
+    },
+    {
+      "name": "赵晨旭",
+      "department": "市场部"
+    },
+    {
+      "name": "闫海玥",
+      "department": "市场部"
+    },
+    {
+      "name": "张子聪慧",
+      "department": "市场部"
+    },
+    {
+      "name": "张若樱",
+      "department": "市场部"
+    },
+    {
+      "name": "李张龙",
+      "department": "市场部"
+    },
+    {
+      "name": "侯楚楚",
+      "department": "市场部"
+    },
+    {
+      "name": "郭杰",
+      "department": "市场部"
+    },
+    {
+      "name": "咸文利",
+      "department": "市场部"
+    },
+    {
+      "name": "郑文淑",
+      "department": "市场部"
+    },
+    {
+      "name": "王琪",
+      "department": "市场部"
+    },
+    {
+      "name": "吕鸿飞",
+      "department": "市场部"
+    },
+    {
+      "name": "胡家铖",
+      "department": "市场部"
+    },
+    {
+      "name": "宋向朋",
+      "department": "市场部"
+    },
+    {
+      "name": "尚艳玲",
+      "department": "市场部"
+    },
+    {
+      "name": "刘林",
+      "department": "市场部"
+    },
+    {
+      "name": "文秀耀",
+      "department": "市场部"
+    },
+    {
+      "name": "赵子萱",
+      "department": "市场部"
+    },
+    {
+      "name": "田阳",
+      "department": "市场部"
+    },
+    {
+      "name": "孙佳",
+      "department": "市场部"
+    },
+    {
+      "name": "薛慧娟",
+      "department": "市场部"
+    },
+    {
+      "name": "李鹏飞",
+      "department": "市场部"
+    },
+    {
+      "name": "刘浩楠",
+      "department": "市场部"
+    },
+    {
+      "name": "杨泽明",
+      "department": "市场部"
+    },
+    {
+      "name": "于诗雨",
+      "department": "市场部"
+    },
+    {
+      "name": "高川",
+      "department": "市场部"
+    },
+    {
+      "name": "吴志鑫",
+      "department": "市场部"
+    }
+  ]
+}

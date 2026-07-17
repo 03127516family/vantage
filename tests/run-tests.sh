@@ -22,6 +22,8 @@ LIVE="http://localhost:$PORT"
 DEAD_URL="http://localhost:59999"
 TOKEN="test-token"
 Q="node $SCRIPT_DIR/qserver.cjs $DATA"
+# 测试里 SessionStart 会被密集触发，关掉 reconcile 节流（T24 单独验证节流行为）
+export VANTAGE_RECONCILE_INTERVAL_MIN=0
 
 S1="11111111-1111-1111-1111-111111111111"
 S2="22222222-2222-2222-2222-222222222222"
@@ -59,7 +61,7 @@ starthook(){ echo "{\"session_id\":\"$1\",\"hook_event_name\":\"SessionStart\"}"
 run_flush(){ HOME="$SB" node "$AGENT/flush.cjs"; }
 
 echo "== setup（写配置 + 同步 agent，跳过触发器）=="
-HOME="$SB" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "赵六" "zhao@example.com" "研发一部" "$LIVE" "$TOKEN" >/dev/null
+HOME="$SB" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "赵六" "研发一部" "$LIVE" "$TOKEN" >/dev/null
 assert "setup 写入身份=赵六" "赵六" "$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1])).name)' "$CONFIG")"
 assert "setup 同步了稳定副本 agent" "1" "$([ -f "$SB/.vantage/agent/capture.cjs" ] && echo 1 || echo 0)"
 # 样本用固定的 2026-07-10 日期，把安装时刻设到更早，让 T1-T12 正常采集
@@ -149,7 +151,7 @@ assert "T14 采到 codex 会话" "gpt-5.5" "$($Q field "$S3" model)"
 
 echo "== T15: setup 不再写 Codex 钩子（改用定时扫描，免手动 /hooks 信任）=="
 SB3="$WORK/home3"; mkdir -p "$SB3/.codex"
-HOME="$SB3" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "钱七" "q@example.com" "研发部" "$LIVE" "$TOKEN" >/dev/null
+HOME="$SB3" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "钱七" "研发部" "$LIVE" "$TOKEN" >/dev/null
 [ ! -f "$SB3/.codex/hooks.json" ] && ok "T15 未写入 ~/.codex/hooks.json" || no "T15 不应再写 hooks.json" "无该文件" "文件存在"
 [ -f "$SB3/.vantage/agent/reconcile.cjs" ] && ok "T15 已同步稳定副本供定时任务引用" || no "T15 稳定副本" "reconcile.cjs 存在" "缺失"
 
@@ -163,6 +165,9 @@ assert "T16 套餐类型"             "plus" "$($Q field "$S3" quota_plan)"
 # Claude S2：缓存读/写 token；Claude 无额度信息 -> 留空
 assert "T16 claude 缓存读 token"  "1500" "$($Q field "$S2" cache_read_tokens)"
 assert "T16 claude 缓存写 token"  "300"  "$($Q field "$S2" cache_creation_tokens)"
+# 缓存写分档（算成本用：5m 档 1.25 倍、1h 档 2 倍计价，拆开才能算准）
+assert "T16 claude 缓存写 5m 档"  "100"  "$($Q field "$S2" cache_creation_5m_tokens)"
+assert "T16 claude 缓存写 1h 档"  "200"  "$($Q field "$S2" cache_creation_1h_tokens)"
 assert "T16 claude 无额度信息"    "null" "$($Q field "$S2" quota_primary_pct)"
 
 echo "== T17: 分模型明细 by_model（一个会话多模型不丢模型维度）=="
@@ -196,7 +201,7 @@ echo '{"server_url":"http://localhost:59999","token":"x"}' > "$SB4/.vantage/conf
 echo "{\"session_id\":\"$S1\",\"transcript_path\":\"$SB4/.claude/projects/proj/$S1.jsonl\",\"hook_event_name\":\"SessionEnd\",\"exit_reason\":\"logout\"}" | HOME="$SB4" node "$AGENT/capture.cjs"; sleep 0.4
 assert "T19 setup 前采到空身份" "" "$(spool_name4 "$S1")"
 # 2) 之后才 setup：写真实身份，installed_at=现在（会话 mtime 早于安装，复现"装前会话"）
-node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({name:"孙八",email:"sun@example.com",department:"研发部",server_url:"http://localhost:59999",token:"x",installed_at:new Date().toISOString()}))' "$SB4/.vantage/config.json"
+node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({name:"孙八",department:"研发部",server_url:"http://localhost:59999",token:"x",installed_at:new Date().toISOString()}))' "$SB4/.vantage/config.json"
 # 3) reconcile 检测身份变更 -> 重扫最近会话 -> 用新身份重写 spool
 echo "{\"hook_event_name\":\"SessionStart\"}" | HOME="$SB4" node "$AGENT/reconcile.cjs"; sleep 0.6
 assert "T19 setup 后旧会话重打身份=孙八" "孙八" "$(spool_name4 "$S1")"
@@ -210,7 +215,7 @@ mkdir -p "$SB5/.claude/projects/proj" "$SB5/.vantage"
 cp "$FIX/claude/$S2.jsonl" "$SB5/.claude/projects/proj/"
 sleep 0.2
 # 直接首次 setup（installed_at=现在 > 会话 mtime），期间从未采集过 S2
-node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({name:"孙八",email:"sun@example.com",department:"研发部",server_url:"http://localhost:59999",token:"x",installed_at:new Date().toISOString()}))' "$SB5/.vantage/config.json"
+node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({name:"孙八",department:"研发部",server_url:"http://localhost:59999",token:"x",installed_at:new Date().toISOString()}))' "$SB5/.vantage/config.json"
 echo "{\"hook_event_name\":\"SessionStart\"}" | HOME="$SB5" node "$AGENT/reconcile.cjs"; sleep 0.6
 [ ! -f "$SPOOL5/claude-code_$S2.json" ] && ok "T20 装前历史未被采集" || no "T20 不应采集装前历史" "无 spool" "被采了"
 
@@ -226,7 +231,7 @@ spool_name6(){ node -e 'const fs=require("fs");try{process.stdout.write(JSON.par
 echo '{"server_url":"http://localhost:59999","token":"x"}' > "$SB6/.vantage/config.json"
 echo "{\"session_id\":\"$S1\",\"transcript_path\":\"$SB6/.claude/projects/proj/$S1.jsonl\",\"hook_event_name\":\"SessionEnd\",\"exit_reason\":\"logout\"}" | HOME="$SB6" node "$AGENT/capture.cjs"; sleep 0.4
 # 2) 之后 setup 写真实身份
-node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({name:"孙八",email:"sun@example.com",department:"研发部",server_url:"http://localhost:59999",token:"x",installed_at:new Date().toISOString()}))' "$SB6/.vantage/config.json"
+node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({name:"孙八",department:"研发部",server_url:"http://localhost:59999",token:"x",installed_at:new Date().toISOString()}))' "$SB6/.vantage/config.json"
 # 3) 模拟 launchd RunAtLoad：--only codex 先跑
 HOME="$SB6" node "$AGENT/reconcile.cjs" --only codex >/dev/null 2>&1; sleep 0.4
 # 4) 随后 setup 后台触发的全量对账才跑
@@ -237,7 +242,7 @@ echo ""
 echo "== T22: 触发器为每天登录时+正午兜底,不再每小时（贴合周会消费节奏）=="
 # DRYRUN 写出定义文件但不注册进系统调度器；仅断言当前平台的产物。
 SB7="$WORK/home7"; mkdir -p "$SB7/.vantage"
-HOME="$SB7" VANTAGE_TRIGGER_DRYRUN=1 node "$REPO/plugin/setup.cjs" "周九" "zhou@example.com" "研发部" "http://localhost:59999" "x" >/dev/null 2>&1
+HOME="$SB7" VANTAGE_TRIGGER_DRYRUN=1 node "$REPO/plugin/setup.cjs" "周九" "研发部" "http://localhost:59999" "x" >/dev/null 2>&1
 if [ "$(uname)" = "Darwin" ]; then
   PLIST="$SB7/Library/LaunchAgents/com.dgcrane.vantage.codex.plist"
   grep -q "StartCalendarInterval" "$PLIST" 2>/dev/null && ok "T22 plist 含正午日程" || no "T22 正午日程" "StartCalendarInterval" "无"
@@ -248,6 +253,41 @@ elif [ "$(uname)" = "Linux" ]; then
   grep -q "OnCalendar=" "$TIMER" 2>/dev/null && ok "T22 timer 含正午日程" || no "T22 正午日程" "OnCalendar" "无"
   ! grep -q "OnUnitActiveSec" "$TIMER" 2>/dev/null && ok "T22 已移除每小时间隔" || no "T22 每小时应移除" "无 OnUnitActiveSec" "仍存在"
 fi
+
+echo ""
+echo "== T24: SessionStart 兜底扫描节流（30 分钟内不重复全量扫）=="
+SB9="$WORK/home9"; LOG9="$SB9/.vantage/agent.log"
+mkdir -p "$SB9/.vantage"
+echo '{"server_url":"http://localhost:59999","token":"x"}' > "$SB9/.vantage/config.json"
+# 第一次 SessionStart：正常全量扫，记录时间戳
+echo '{"hook_event_name":"SessionStart"}' | HOME="$SB9" VANTAGE_RECONCILE_INTERVAL_MIN=30 node "$AGENT/reconcile.cjs"; sleep 0.3
+grep -q "reconcile: found" "$LOG9" && ok "T24 首次 SessionStart 正常扫描" || no "T24 首次扫描" "found" "无"
+# 第二次 SessionStart（30 分钟内）：应被节流
+echo '{"hook_event_name":"SessionStart"}' | HOME="$SB9" VANTAGE_RECONCILE_INTERVAL_MIN=30 node "$AGENT/reconcile.cjs"; sleep 0.3
+grep -q "reconcile: throttled" "$LOG9" && ok "T24 第二次被节流" || no "T24 节流" "throttled" "无"
+# 手动/定时路径（无 SessionStart 事件）不受节流：--only codex 照常执行
+HOME="$SB9" VANTAGE_RECONCILE_INTERVAL_MIN=30 node "$AGENT/reconcile.cjs" --only codex >/dev/null 2>&1; sleep 0.3
+grep 'reconcile:' "$LOG9" | tail -1 | grep -q "found" && ok "T24 --only 定时路径不受节流" \
+  || no "T24 --only 不节流" "found" "$(grep 'reconcile:' "$LOG9" | tail -1)"
+
+echo ""
+echo "== T23: 花名册——姓名自动填部门,不再登记邮箱 =="
+SB8="$WORK/home8"; mkdir -p "$SB8"
+CFG8="$SB8/.vantage/config.json"
+dept8(){ node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1])).department||"")' "$CFG8"; }
+# 在册姓名：只给名字，部门按 roster.json 自动填
+HOME="$SB8" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "李栋" >/dev/null
+assert "T23 在册姓名自动填部门" "外贸部" "$(dept8)"
+# 在册但乱填部门：以通讯录为准
+HOME="$SB8" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "王聪" "研发部" >/dev/null
+assert "T23 在册者手填部门被通讯录纠正" "财务部" "$(dept8)"
+assert "T23 config 不再含邮箱字段" "0" "$(node -e 'process.stdout.write("email" in JSON.parse(require("fs").readFileSync(process.argv[1]))?"1":"0")' "$CFG8")"
+# 不在册且没给部门：退出码 2（技能据此引导用户核对姓名/手选部门）
+HOME="$SB8" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "查无此人" >/dev/null 2>&1; RC23=$?
+assert "T23 不在册且无部门 -> 退出码 2" "2" "$RC23"
+# 第二参数误传邮箱（旧用法）：明确报错
+HOME="$SB8" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "李栋" "a@b.com" >/dev/null 2>&1; RC23b=$?
+assert "T23 误传邮箱 -> 退出码 1" "1" "$RC23b"
 
 echo ""
 echo "======================================================"

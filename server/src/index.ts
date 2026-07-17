@@ -80,7 +80,8 @@ function buildStats() {
         reasoning_tokens: s.reasoning_tokens,
       });
     }
-    const k = s.email || s.machine || "unknown";
+    // 聚合键：姓名（setup 已按公司通讯录校验）优先；老记录退回邮箱，再退主机名
+    const k = s.name || s.email || s.machine || "unknown";
     const agg = byEmail.get(k) ?? {
       name: s.name,
       email: s.email,
@@ -105,8 +106,15 @@ function buildStats() {
     agg.cache_creation_tokens += s.cache_creation_tokens ?? 0;
     if (s.tool) agg.tools.add(s.tool);
     if (s.model) agg.models.add(s.model);
-    const t = s.ended_at || s.received_at;
-    if (t > agg.last_used) agg.last_used = t;
+    const t = s.ended_at || s.received_at || "";
+    if (t >= agg.last_used) {
+      agg.last_used = t;
+      // 身份同额度一样取"最新会话的快照"：员工重新 setup 纠正部门后，
+      // 看板立刻显示新部门，不被 7 天前未重传的老会话里的旧身份卡住。
+      agg.name = s.name;
+      agg.email = s.email;
+      agg.department = s.department;
+    }
     // 额度是“当前快照”不可累加：谁的会话最新就用谁的
     if (s.quota_primary_pct != null || s.quota_secondary_pct != null) {
       const qt = s.ended_at || s.received_at || "";

@@ -1,6 +1,6 @@
 {
-  "_comment": "dgcrane 管理员：发布前把 server_url/token 改成真实值；departments 改成公司真实部门（setup 让员工选）。",
+  "_comment": "dgcrane 管理员：发布前把 server_url/token 改成真实值。departments 仅作兜底菜单（新员工不在 roster.json 时手选）；正常路径部门由 setup.cjs 按 roster.json 自动填。",
   "server_url": "http://192.168.20.15:3000",
   "token": "dgcrane-vantage-trial",
-  "departments": ["研发部", "产品部", "测试部", "设计部", "运营部", "其他"]
+  "departments": ["外贸部", "市场部", "财务部", "技术部", "行政部", "其他"]
 }

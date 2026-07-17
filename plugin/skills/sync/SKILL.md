@@ -10,7 +10,7 @@ disable-model-invocation: false
 
 流程：
 
-1. 先检查是否已初始化：用 Bash 读 `~/.vantage/config.json`。若文件不存在或其中 `email` 为空，
+1. 先检查是否已初始化：用 Bash 读 `~/.vantage/config.json`。若文件不存在或其中 `name` 为空，
    告知用户「还没登记过信息，先做一次初始化」，转而按 setup 技能的流程引导（或提示运行
    `/vantage:setup`），**不要在未登记身份的情况下继续同步**。
 

@@ -14,6 +14,10 @@ const { parseCodexRollout } = require("./parsers/codex.cjs");
 
 // 只回看最近 N 天的会话，避免首次安装时把全部历史一次性灌上去
 const RECENT_DAYS = Number(process.env.VANTAGE_RECENT_DAYS || 7);
+// SessionStart 兜底扫描的节流间隔：重度用户一天开几十个会话，每次都全量扫目录纯属空转。
+// 距上次成功的全量扫描不足 N 分钟就跳过本轮（只影响钩子路径；手动 sync、--only 定时任务、
+// setup 后的首次对账都不带 SessionStart 事件，不受节流）。
+const THROTTLE_MS = Number(process.env.VANTAGE_RECONCILE_INTERVAL_MIN || 30) * 60 * 1000;
 // 死信/损坏文件保留天数
 const RETENTION_DAYS = Number(process.env.VANTAGE_RETENTION_DAYS || 14);
 
@@ -53,17 +57,25 @@ function syncStableCopy() {
   }
 }
 
+// 手写递归列目录：readdirSync 的 recursive 选项要 Node 18.17+，老 Node 会静默忽略、
+// 只返回顶层 -> 子目录里的会话（Claude projects/<项目>/、Codex sessions/年/月/日/）
+// 一条都扫不到还不报错。withFileTypes 自 Node 10 可用，不踩版本坑。
 function listJsonl(dir) {
   const out = [];
-  let entries = [];
-  try {
-    entries = fs.readdirSync(dir, { recursive: true });
-  } catch {
-    return out;
-  }
-  for (const e of entries) {
-    const name = typeof e === "string" ? e : String(e);
-    if (name.endsWith(".jsonl")) out.push(path.join(dir, name));
+  const stack = [dir];
+  while (stack.length) {
+    const d = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) stack.push(full);
+      else if (e.name.endsWith(".jsonl")) out.push(full);
+    }
   }
   return out;
 }
@@ -109,16 +121,32 @@ async function main() {
 
   // 当前刚开的会话：从 SessionStart 的 stdin 拿 session_id，扫描时跳过它
   let currentSessionId = "";
+  let hookEvent = "";
   const raw = await core.readStdin(1200);
   if (raw && raw.trim()) {
     try {
-      currentSessionId = JSON.parse(raw).session_id || "";
+      const hook = JSON.parse(raw);
+      currentSessionId = hook.session_id || "";
+      hookEvent = hook.hook_event_name || "";
     } catch {
       /* ignore */
     }
   }
 
-  syncStableCopy(); // 从插件目录运行时，刷新 Codex 用的稳定副本
+  syncStableCopy(); // 从插件目录运行时，刷新 Codex 用的稳定副本（节流前做，插件更新及时生效）
+
+  // 节流：SessionStart 是高频路径，30 分钟内已全量扫过就不再空转。
+  // 仍触发一次 flush——若 spool 里有断网滞留的记录，网络恢复后开会话即补传，不等下轮扫描。
+  if (hookEvent === "SessionStart") {
+    const last = Number(core.readState().__last_reconcile__ || 0);
+    if (Date.now() - last < THROTTLE_MS) {
+      core.log(
+        `reconcile: throttled (last full scan ${Math.round((Date.now() - last) / 60000)}min ago)`
+      );
+      core.spawnDetached("flush.cjs");
+      return;
+    }
+  }
 
   // 身份变更检测：setup 改了 name/email/department 后（含"从未配置 -> 首次配置"），
   // 把"已采过"的会话标记清空并记入 restamp 集合，强制本轮用新身份重传——服务端按
@@ -132,7 +160,8 @@ async function main() {
     const prev = state.__identity__ ?? "";
     if (prev !== idKey) {
       for (const k of Object.keys(state)) {
-        if (k !== "__identity__") {
+        if (!k.startsWith("__")) {
+          // "__" 开头是元数据（__identity__/__last_reconcile__），不是会话文件标记
           delete state[k];
           restamp.add(k);
         }
@@ -194,6 +223,12 @@ async function main() {
   core.log(
     `reconcile: found ${totalFiles} files, spooled ${swept} unsynced (skip=${currentSessionId || "none"})`
   );
+  // 只有全量扫描才更新节流时间戳：--only 单源扫没覆盖另一数据源，不能挡住后续的全量扫。
+  if (!only) {
+    const state = core.readState();
+    state.__last_reconcile__ = Date.now();
+    core.writeState(state);
+  }
   // 无论本轮是否有新增，都触发一次上传：既发新采的，也补之前失败的。
   core.spawnDetached("flush.cjs");
 }
