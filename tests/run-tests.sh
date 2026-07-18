@@ -299,6 +299,27 @@ assert "T25 first_prompt 被服务端脱敏" "联系我 [email]" "$($Q field "$S
 assert "T25 summary 不受影响"        "正常摘要"        "$($Q field "$SID25" summary)"
 
 echo ""
+echo "== T26: 信封字段 + 迟到旧快照不顶回新快照(effective_ts 合并) =="
+SID26="t26-$(date +%s)"
+curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"claude-code\",\"session_id\":\"$SID26\",\"dedupe_key\":\"claude-code:$SID26\",\"name\":\"T26测试用户\",\"total_tokens\":100,\"observed_at\":\"2026-07-17T10:00:00.000Z\"}" >/dev/null
+curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"claude-code\",\"session_id\":\"$SID26\",\"dedupe_key\":\"claude-code:$SID26\",\"name\":\"T26测试用户\",\"total_tokens\":50,\"observed_at\":\"2026-07-17T09:00:00.000Z\"}" >/dev/null
+sleep 0.3
+# 服务端索引(/stats):该用户总量=100(旧快照未顶回);qserver 按行序折叠,不适用此断言
+STATS26="$(curl -s -H "Authorization: Bearer $TOKEN" "$LIVE/stats")"
+u26(){ echo "$STATS26" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=(JSON.parse(s).users||[]).find(x=>x.name==="T26测试用户");process.stdout.write(u?String(u[process.argv[1]]):"MISSING")})' "$1"; }
+assert "T26 旧快照未顶回(总量=100)" "100" "$(u26 total_tokens)"
+assert "T26 会话数=1(已合并)"      "1"   "$(u26 sessions)"
+# 但两个事件都进了 JSONL(事件不丢)
+assert "T26 两条事件都归档" "2" "$(grep -c "claude-code:$SID26" "$DATA")"
+# 信封:event_id 为 26 字符 ULID、observed_at 透传进归档记录
+EID26="$($Q field "$SID26" event_id)"
+[ "${#EID26}" = "26" ] && ok "T26 event_id 为 26 字符 ULID" || no "T26 event_id 长度" "26" "${#EID26}"
+[ "$(grep "claude-code:$SID26" "$DATA" | grep -c '"observed_at":"2026-07-17T10:00:00.000Z"')" = "1" ] \
+  && ok "T26 observed_at 透传进归档记录" || no "T26 observed_at 透传" "归档含 10:00 快照" "无"
+
+echo ""
 echo "======================================================"
 echo " 结果: PASS=$PASS  FAIL=$FAIL"
 echo "======================================================"

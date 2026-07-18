@@ -509,10 +509,11 @@ assert "T26 旧快照未顶回(总量=100)" "100" "$(u26 total_tokens)"
 assert "T26 会话数=1(已合并)"      "1"   "$(u26 sessions)"
 # 但两个事件都进了 JSONL(事件不丢)
 assert "T26 两条事件都归档" "2" "$(grep -c "claude-code:$SID26" "$DATA")"
-# 信封:event_id 为 26 字符 ULID、observed_at 透传
+# 信封:event_id 为 26 字符 ULID、observed_at 透传进归档记录
 EID26="$($Q field "$SID26" event_id)"
 [ "${#EID26}" = "26" ] && ok "T26 event_id 为 26 字符 ULID" || no "T26 event_id 长度" "26" "${#EID26}"
-assert "T26 observed_at 透传" "2026-07-17T10:00:00.000Z" "$($Q field "$SID26" observed_at)"
+[ "$(grep "claude-code:$SID26" "$DATA" | grep -c '"observed_at":"2026-07-17T10:00:00.000Z"')" = "1" ] \
+  && ok "T26 observed_at 透传进归档记录" || no "T26 observed_at 透传" "归档含 10:00 快照" "无"
 ```
 
 Run: `bash tests/run-tests.sh`
