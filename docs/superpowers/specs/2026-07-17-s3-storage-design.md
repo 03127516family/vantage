@@ -93,7 +93,7 @@ s3://vantage-prod/
 | 字段 | 生成方 | 含义 |
 |---|---|---|
 | `event_id` | 服务端 | ULID，全局唯一；文件名组成部分；对账重传的幂等键 |
-| `observed_at` | 采集端（**新增字段**） | 生成本快照的本地 UTC 时间。SessionEnd 钩子 ≈ ended_at；reconcile 重传 = 扫描时刻。用于回放时判断"哪份快照更新" |
+| `observed_at` | 采集端 | 生成本快照的本地 UTC 时间。SessionEnd 钩子 ≈ ended_at；reconcile 重传 = 扫描时刻。用于回放时判断"哪份快照更新"。注：采集端此前已发送同义字段 `collected_at`，现统一更名为 `observed_at`，服务端对旧字段回退兼容 |
 | `received_at` | 服务端（已有） | 服务端收到时间。分区与文件名使用它 |
 
 其余字段与 `server/src/store.ts` 的 `UsageRecord` 完全一致：
@@ -162,7 +162,7 @@ s3://vantage-prod/
 **合并规则**：同一 `dedupe_key`，保留**有效观测时间**最大的那条：
 
 ```text
-effective_ts = observed_at ?? ended_at ?? received_at     # 老数据逐级回退
+effective_ts = observed_at ?? collected_at ?? ended_at ?? received_at     # 老数据逐级回退（collected_at 为旧字段名）
 新事件 effective_ts >= 索引中已有记录 → 替换；否则不替换（但事件照样归档，见 §6.4）
 ```
 
