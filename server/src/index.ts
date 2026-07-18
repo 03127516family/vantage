@@ -1,6 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { upsert, allSessions, jsonlPath, type UsageRecord } from "./store.ts";
+import { upsert, allSessions, allWallHits, dayKeyLocal, effectiveTs, jsonlPath, type UsageRecord } from "./store.ts";
 import { redactRecord } from "./redact.ts";
 import { initArchive } from "./archive.ts";
 import { s3ConfigFromEnv } from "./s3.ts";
@@ -104,7 +104,11 @@ function buildStats() {
       quota_secondary_pct: null as number | null,
       quota_plan: null as string | null,
       quota_reached: null as string | null,
-      quota_at: "",
+      quota_at: 0, // 内部比较用(effective_ts),输出时被剥离
+      // 撞墙历史(spec §6.3):与"当前额度"分开——窗口刷新只覆盖当前值,抹不掉历史事实
+      hit_wall_today: false,
+      hit_wall_7d: false,
+      last_wall_hit: "",
     };
     agg.sessions += 1;
     agg.total_tokens += s.total_tokens ?? 0;
@@ -121,9 +125,10 @@ function buildStats() {
       agg.email = s.email;
       agg.department = s.department;
     }
-    // 额度是“当前快照”不可累加：谁的会话最新就用谁的
+    // 额度是“当前快照”不可累加：谁的有效观测时间(effective_ts)最新就用谁的(spec §6.2)。
+    // 用 effective_ts 而非 received_at:迟到的旧额度快照(如离线补传)不会顶回新额度。
     if (s.quota_primary_pct != null || s.quota_secondary_pct != null) {
-      const qt = s.ended_at || s.received_at || "";
+      const qt = effectiveTs(s);
       if (qt >= agg.quota_at) {
         agg.quota_at = qt;
         agg.quota_primary_pct = s.quota_primary_pct ?? null;
@@ -133,6 +138,20 @@ function buildStats() {
       }
     }
     byEmail.set(k, agg);
+  }
+  // 撞墙历史扫描(spec §6.3):当前额度取最新快照,但"今天/本周是否撞过墙"要扫全部撞墙事件,
+  // 哪怕当前已窗口刷新恢复。窗口:今天=服务端本地当日(非 UTC,见 dayKeyLocal);7d=滚动 7 天。
+  const now = Date.now();
+  const todayLocal = dayKeyLocal(now);
+  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+  for (const wh of allWallHits()) {
+    const agg = byEmail.get(wh.name);
+    if (!agg) continue; // 撞墙记录的用户没有会话聚合(罕见),跳过
+    if (dayKeyLocal(wh.at) === todayLocal) agg.hit_wall_today = true;
+    if (wh.at >= now - SEVEN_DAYS) agg.hit_wall_7d = true;
+    if (!agg.last_wall_hit || wh.at > Date.parse(agg.last_wall_hit)) {
+      agg.last_wall_hit = new Date(wh.at).toISOString();
+    }
   }
   return {
     total_sessions: sessions.length,

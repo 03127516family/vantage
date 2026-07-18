@@ -70,3 +70,26 @@ test("replay: 启动回放同样按 effective_ts 合并(子进程验证)", () =>
   const s1 = sessions.find((r: any) => r.dedupe_key === "claude-code:s-1");
   assert.equal(s1.total_tokens, 100);
 });
+
+test("allWallHits: 撞墙历史即使被后续刷新快照覆盖也保留(spec §6.3)", () => {
+  const before = store.allWallHits().length;
+  // 早上撞墙(quota_reached=primary)
+  store.upsert(rec({ session_id: "s-w", dedupe_key: "claude-code:s-w", name: "撞墙", quota_reached: "primary", observed_at: "2026-07-17T10:00:00.000Z" }));
+  // 下午窗口刷新(同会话,快照更新,quota_reached=null)——当前状态不再撞墙,但早上的事实必须留痕
+  store.upsert(rec({ session_id: "s-w", dedupe_key: "claude-code:s-w", name: "撞墙", quota_reached: null, observed_at: "2026-07-17T15:00:00.000Z" }));
+  const added = store.allWallHits().slice(before); // 这两条 upsert 新增的撞墙记录
+  assert.equal(added.length, 1);                   // 刷新那条 quota_reached=null 不计
+  assert.equal(added[0].type, "primary");
+  assert.equal(added[0].name, "撞墙");
+  assert.equal(added[0].at, Date.parse("2026-07-17T10:00:00.000Z"));
+});
+
+test("dayKeyLocal: 按本地时区取日(UTC 傍晚在中国时区算次日)", () => {
+  // 16:30 UTC + 8h = 次日 00:30 上海。强制 TZ=Asia/Shanghai,证明用"本地日"而非 UTC 日。
+  const out = execFileSync(
+    process.execPath,
+    ["--import", "tsx", "-e", `import("./src/store.ts").then(m=>console.log(m.dayKeyLocal(Date.parse("2026-07-18T16:30:00.000Z"))))`],
+    { env: { ...process.env, TZ: "Asia/Shanghai", VANTAGE_DATA_DIR: dir }, cwd: join(import.meta.dirname, ".."), encoding: "utf8" }
+  );
+  assert.equal(out.trim(), "2026-07-19");
+});

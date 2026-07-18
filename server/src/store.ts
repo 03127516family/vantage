@@ -82,6 +82,17 @@ export interface StoredRecord extends UsageRecord {
 // 内存索引:dedupe_key -> effective_ts 最大的记录
 const index = new Map<string, StoredRecord>();
 
+// 撞墙历史(spec §6.3):只收 quota_reached != null 的事件,含已被新快照覆盖的早间撞墙。
+// 合并索引只留最新快照,下午的窗口刷新会覆盖掉早上的撞墙事实,故必须单独留痕。
+const wallHits: WallHit[] = [];
+
+/** 一条撞墙历史:谁、何时(effective_ts)、撞了哪档墙(primary/secondary 等) */
+export interface WallHit {
+  name: string;
+  at: number; // effective_ts(ms)
+  type: string; // quota_reached 原值
+}
+
 function keyOf(r: UsageRecord): string {
   return r.dedupe_key || `${r.tool ?? "unknown"}:${r.session_id ?? "no-session"}`;
 }
@@ -98,6 +109,19 @@ export function effectiveTs(r: UsageRecord): number {
 }
 
 /**
+ * 本地日历日(YYYY-MM-DD),用于"今天是否撞过墙"(spec §6.3)。
+ * 用服务端本地时区而非 UTC:团队与服务器同时区,本地 0 点才是"今天"的边界——
+ * 用 UTC 日会让非 UTC 时区清晨/深夜的撞墙归错天。
+ */
+export function dayKeyLocal(ts: number): string {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
  * 合并进索引:同 key 取 effective_ts 大者(相等时后到者胜,等价于同毫秒内的后到覆盖)。
  * 注意:这只决定"当前状态";无论胜负,记录都已写进 JSONL/S3(事件不丢)。
  * 与读取顺序无关(order-independent),回放可任意并行。
@@ -106,6 +130,15 @@ function mergeIndex(rec: StoredRecord): void {
   const k = keyOf(rec);
   const prev = index.get(k);
   if (!prev || effectiveTs(rec) >= effectiveTs(prev)) index.set(k, rec);
+  // 撞墙是历史事实:即使该快照随后被刷新覆盖,也要留痕(spec §6.3)。
+  // mergeIndex 是 upsert 与 replay 的共同入口,每条事件(含被覆盖的)恰好经过一次。
+  if (rec.quota_reached) {
+    wallHits.push({
+      name: rec.name || rec.email || rec.machine || "unknown",
+      at: effectiveTs(rec),
+      type: String(rec.quota_reached),
+    });
+  }
 }
 
 // 启动时回放 JSONL 重建索引(与 upsert 同一套合并规则)
@@ -141,6 +174,11 @@ export function upsert(rec: UsageRecord): StoredRecord {
 /** 当前所有会话(每个 session 只保留 effective_ts 最大的快照) */
 export function allSessions(): StoredRecord[] {
   return [...index.values()];
+}
+
+/** 全部撞墙历史(用于回答"今天/本周是否撞过墙",spec §6.3) */
+export function allWallHits(): readonly WallHit[] {
+  return wallHits;
 }
 
 export { jsonlPath };
