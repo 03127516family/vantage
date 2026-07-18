@@ -320,6 +320,57 @@ EID26="$($Q field "$SID26" event_id)"
   && ok "T26 observed_at 透传进归档记录" || no "T26 observed_at 透传" "归档含 10:00 快照" "无"
 
 echo ""
+echo "== T27: S3 归档全链路(fake-s3:key 形状/签名头/故障不阻塞/对账兜底) =="
+# 重启后端,带上指向 fake-s3 的 S3 配置(同一数据目录)
+FAKE_PORT=4999
+FAKE_LOG="$WORK/fakes3.jsonl"
+node "$SCRIPT_DIR/fake-s3.cjs" "$FAKE_PORT" "$FAKE_LOG" &
+FAKE_PID=$!
+kill "$SERVER_PID" 2>/dev/null; kill_port; sleep 0.5
+( cd "$REPO/server" && VANTAGE_DATA_DIR="$DATA_DIR" INGEST_TOKEN="$TOKEN" PORT="$PORT" \
+    VANTAGE_S3_BUCKET="test-bucket" VANTAGE_S3_REGION="us-east-1" \
+    VANTAGE_S3_ENDPOINT="http://localhost:$FAKE_PORT" \
+    AWS_ACCESS_KEY_ID="AKIDEXAMPLE" AWS_SECRET_ACCESS_KEY="testsecret" \
+    VANTAGE_S3_SWEEP_INTERVAL_SEC=5 \
+    npm start >"$WORK/server-s3.log" 2>&1 ) &
+SERVER_PID=$!
+for _ in $(seq 1 30); do curl -sf "$LIVE/health" >/dev/null 2>&1 && break; sleep 0.3; done
+
+# 1) 正常归档:PUT 到达 fake-s3,path 含 event_id(SDK path-style:/<bucket>/<key>),带 SigV4 头
+S4="44444444-4444-4444-4444-444444444444"
+cp "$FIX/claude/$S1.jsonl" "$SB/.claude/projects/proj/$S4.jsonl"
+node -e 'const fs=require("fs");const p=process.argv[1];const l=fs.readFileSync(p,"utf8").replace(/11111111-1111-1111-1111-111111111111/g,"44444444-4444-4444-4444-444444444444");fs.writeFileSync(p,l)' "$SB/.claude/projects/proj/$S4.jsonl"
+endhook "$S4" "logout"; sleep 1.5
+EID27="$($Q field "$S4" event_id)"
+fake_has(){ grep -c "$1" "$FAKE_LOG" 2>/dev/null || true; }
+[ "$(fake_has "$EID27")" -ge 1 ] && ok "T27 event 已 PUT 到 S3(path 含 event_id)" || no "T27 PUT 归档" "含 $EID27" "$(head -3 "$FAKE_LOG" 2>/dev/null)"
+# 注:SDK 在请求线上会把 = 编码为 %3D,S3 收到后解码——真实 key 仍是 events/dt=...(spec §2)
+grep -E '"path":"/test-bucket/events/dt(=|%3D)' "$FAKE_LOG" | grep -q "_claude-code.json" \
+  && ok "T27 path 形状 /test-bucket/events/dt=..._claude-code.json" || no "T27 path 形状" "/test-bucket/events/dt=…" "$(head -1 "$FAKE_LOG")"
+grep -q '"authorization":"AWS4-HMAC-SHA256 ' "$FAKE_LOG" \
+  && ok "T27 带 SigV4 Authorization 头" || no "T27 签名头" "AWS4-HMAC-SHA256" "无"
+
+# 2) S3 宕机:/ingest 照常成功(异步不阻塞),事件落死信
+kill "$FAKE_PID" 2>/dev/null; sleep 0.3
+S5="55555555-5555-5555-5555-555555555555"
+cp "$SB/.claude/projects/proj/$S4.jsonl" "$SB/.claude/projects/proj/$S5.jsonl"
+node -e 'const fs=require("fs");const p=process.argv[1];fs.writeFileSync(p,fs.readFileSync(p,"utf8").replace(/44444444-4444-4444-4444-444444444444/g,"55555555-5555-5555-5555-555555555555"))' "$SB/.claude/projects/proj/$S5.jsonl"
+endhook "$S5" "logout"; sleep 1.5
+assert "T27 S3 宕机 ingest 照常" "赵六" "$(name_of "$S5")"
+DEAD_JSONL="$DATA_DIR/s3-archive-dead.jsonl"
+EID27b="$($Q field "$S5" event_id)"
+[ -s "$DEAD_JSONL" ] && grep -q "$EID27b" "$DEAD_JSONL" \
+  && ok "T27 失败事件落死信" || no "T27 死信" "含 $EID27b" "$(head -2 "$DEAD_JSONL" 2>/dev/null)"
+
+# 3) S3 恢复:对账器(VANTAGE_S3_SWEEP_INTERVAL_SEC=5)自动补传死信
+node "$SCRIPT_DIR/fake-s3.cjs" "$FAKE_PORT" "$FAKE_LOG" &
+FAKE_PID=$!
+sleep 7
+[ "$(fake_has "$EID27b")" -ge 1 ] && ok "T27 对账器补传死信成功" || no "T27 对账补传" "含 $EID27b" "$(tail -2 "$FAKE_LOG")"
+[ -s "$DEAD_JSONL" ] && no "T27 死信应清空" "空" "仍有内容" || ok "T27 死信已清空"
+kill "$FAKE_PID" 2>/dev/null
+
+echo ""
 echo "======================================================"
 echo " 结果: PASS=$PASS  FAIL=$FAIL"
 echo "======================================================"

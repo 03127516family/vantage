@@ -1193,7 +1193,8 @@ endhook "$S4" "logout"; sleep 1.5
 EID27="$($Q field "$S4" event_id)"
 fake_has(){ grep -c "$1" "$FAKE_LOG" 2>/dev/null || true; }
 [ "$(fake_has "$EID27")" -ge 1 ] && ok "T27 event 已 PUT 到 S3(path 含 event_id)" || no "T27 PUT 归档" "含 $EID27" "$(head -3 "$FAKE_LOG" 2>/dev/null)"
-grep '"path":"/test-bucket/events/dt=' "$FAKE_LOG" | grep -q "_claude-code.json" \
+# 注:SDK 在请求线上会把 = 编码为 %3D,S3 收到后解码——真实 key 仍是 events/dt=...(spec §2)
+grep -E '"path":"/test-bucket/events/dt(=|%3D)' "$FAKE_LOG" | grep -q "_claude-code.json" \
   && ok "T27 path 形状 /test-bucket/events/dt=..._claude-code.json" || no "T27 path 形状" "/test-bucket/events/dt=…" "$(head -1 "$FAKE_LOG")"
 grep -q '"authorization":"AWS4-HMAC-SHA256 ' "$FAKE_LOG" \
   && ok "T27 带 SigV4 Authorization 头" || no "T27 签名头" "AWS4-HMAC-SHA256" "无"
