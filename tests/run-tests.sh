@@ -32,7 +32,10 @@ S3="33333333-3333-3333-3333-333333333333"   # codex
 # npm start 会派生 tsx 子进程，kill 父进程杀不到子进程 -> 端口会残留占用，拖垮后续运行。
 # 因此按端口兜底清理。
 kill_port() { lsof -ti tcp:"$PORT" 2>/dev/null | xargs kill -9 2>/dev/null; }
-cleanup() { [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null; kill_port; rm -rf "$WORK"; }
+# 按端口逐个杀(多个端口不能写成 lsof -ti tcp:a b c,会被当文件名参数;逐个才稳)。
+# T30 起的额外服务器/fake-s3 用:npm start 派生 tsx 子进程,kill 父进程杀不掉,必须按端口清。
+killp(){ for pp in "$@"; do lsof -ti tcp:"$pp" 2>/dev/null | xargs kill -9 2>/dev/null; done; }
+cleanup() { [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null; kill_port; killp 3971 3972 4971; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 # --- 沙箱会话文件 ---
@@ -59,6 +62,8 @@ set_installed(){ node -e 'const fs=require("fs");const p=process.argv[2];const c
 endhook(){ echo "{\"session_id\":\"$1\",\"transcript_path\":\"$SB/.claude/projects/proj/$1.jsonl\",\"hook_event_name\":\"SessionEnd\",\"exit_reason\":\"$2\"}" | HOME="$SB" node "$AGENT/capture.cjs"; }
 starthook(){ echo "{\"session_id\":\"$1\",\"hook_event_name\":\"SessionStart\"}" | HOME="$SB" node "$AGENT/reconcile.cjs"; }
 run_flush(){ HOME="$SB" node "$AGENT/flush.cjs"; }
+# 本地当天 HH[:MM] 的 UTC ISO 表示(与服务端"本地日"判定一致,任何时区跑都稳)
+iso_local(){ node -e "const d=new Date();d.setHours($1,${2:-0},0,0);process.stdout.write(d.toISOString())"; }
 
 echo "== setup（写配置 + 同步 agent，跳过触发器）=="
 HOME="$SB" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "赵六" "研发一部" "$LIVE" "$TOKEN" >/dev/null
@@ -369,6 +374,118 @@ sleep 7
 [ "$(fake_has "$EID27b")" -ge 1 ] && ok "T27 对账器补传死信成功" || no "T27 对账补传" "含 $EID27b" "$(tail -2 "$FAKE_LOG")"
 [ -s "$DEAD_JSONL" ] && no "T27 死信应清空" "空" "仍有内容" || ok "T27 死信已清空"
 kill "$FAKE_PID" 2>/dev/null
+
+echo ""
+echo "== T28: 撞墙历史不丢(窗口刷新后仍记得今天撞过墙) =="
+# spec §5/§6.3:同一会话早上撞墙(quota_reached=primary 100%),下午窗口刷新(quota_reached=null 30%)。
+# 当前额度应显示 30%(§6.2);但 hit_wall_today 仍为 true——窗口刷新只覆盖当前值,抹不掉历史事实。
+# 用本地当天时间,跟服务端"本地日"判定一致(任何时区跑都稳,不随日期/时区漂移)。
+SID28="t28-$(date +%s)"
+curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"codex\",\"session_id\":\"$SID28\",\"dedupe_key\":\"codex:$SID28\",\"name\":\"撞墙测试\",\"quota_primary_pct\":100,\"quota_reached\":\"primary\",\"quota_plan\":\"plus\",\"observed_at\":\"$(iso_local 10)\"}" >/dev/null
+curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"codex\",\"session_id\":\"$SID28\",\"dedupe_key\":\"codex:$SID28\",\"name\":\"撞墙测试\",\"quota_primary_pct\":30,\"quota_reached\":null,\"quota_plan\":\"plus\",\"observed_at\":\"$(iso_local 15)\"}" >/dev/null
+sleep 0.3
+STATS28="$(curl -s -H "Authorization: Bearer $TOKEN" "$LIVE/stats")"
+u28(){ echo "$STATS28" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=(JSON.parse(s).users||[]).find(x=>x.name==="撞墙测试");process.stdout.write(u==null?"MISSING":String(u[process.argv[1]]))})' "$1"; }
+assert "T28 当前额度=30%(窗口已刷新)"      "30"   "$(u28 quota_primary_pct)"
+assert "T28 当前未撞墙(quota_reached=null)" "null" "$(u28 quota_reached)"
+assert "T28 仍记得今天撞过墙"              "true" "$(u28 hit_wall_today)"
+
+echo ""
+echo "== T29: 当前额度跨会话取最新(§6.2,同一用户多会话,最新带额度的胜) =="
+SID29A="t29a-$(date +%s)"
+SID29B="t29b-$(date +%s)"
+# 同一用户两个不同会话,各带额度快照;有效时间更晚的(88%)应为当前额度,不是 42% 也不是求和
+curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"codex\",\"session_id\":\"$SID29A\",\"dedupe_key\":\"codex:$SID29A\",\"name\":\"额度测试\",\"quota_primary_pct\":42,\"quota_plan\":\"plus\",\"observed_at\":\"$(iso_local 10)\"}" >/dev/null
+curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"codex\",\"session_id\":\"$SID29B\",\"dedupe_key\":\"codex:$SID29B\",\"name\":\"额度测试\",\"quota_primary_pct\":88,\"quota_plan\":\"plus\",\"observed_at\":\"$(iso_local 14)\"}" >/dev/null
+sleep 0.3
+STATS29="$(curl -s -H "Authorization: Bearer $TOKEN" "$LIVE/stats")"
+u29(){ echo "$STATS29" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=(JSON.parse(s).users||[]).find(x=>x.name==="额度测试");process.stdout.write(u==null?"MISSING":String(u[process.argv[1]]))})' "$1"; }
+assert "T29 当前额度取跨会话最新=88%" "88" "$(u29 quota_primary_pct)"
+assert "T29 两会话都计入(sessions=2)"  "2"  "$(u29 sessions)"
+
+echo ""
+echo "== T30: restore:s3 回放等价(灾备真能还原等价状态,spec §9) =="
+# 自包含:全新数据目录 + 独立 fake-s3,全程开 S3。ingest 几条(含合并 + 撞墙),
+# restore 出文件后用第二台服务器(无 S3)replay,/stats 必须与原服务器等价。
+RPORT1=3971; RPORT2=3972; RFAKE=4971
+RDIR1="$WORK/r1"; RDIR2="$WORK/r2"; mkdir -p "$RDIR1" "$RDIR2"
+RFAKE_LOG="$WORK/rfake.jsonl"; RESTORED="$WORK/usage-restored.jsonl"
+killp "$RPORT1" "$RPORT2" "$RFAKE"
+node "$SCRIPT_DIR/fake-s3.cjs" "$RFAKE" "$RFAKE_LOG" & RPID_FAKE=$!
+sleep 0.3
+( cd "$REPO/server" && VANTAGE_DATA_DIR="$RDIR1" INGEST_TOKEN="$TOKEN" PORT="$RPORT1" \
+    VANTAGE_S3_BUCKET="test-bucket" VANTAGE_S3_REGION="us-east-1" \
+    VANTAGE_S3_ENDPOINT="http://localhost:$RFAKE" \
+    AWS_ACCESS_KEY_ID="AKIDEXAMPLE" AWS_SECRET_ACCESS_KEY="testsecret" \
+    npm start >"$WORK/r1.log" 2>&1 ) & RPID1=$!
+for _ in $(seq 1 40); do curl -sf "http://localhost:$RPORT1/health" >/dev/null 2>&1 && break; sleep 0.3; done
+TODAY30="$(date -u +%Y-%m-%d)"; RX="t30-$(date +%s)"
+# 灾备甲:同会话三快照(100@09:00 -> 撞墙150@10:00 -> 刷新150@11:00),灾备乙:claude 200;时间用本地当天
+curl -s -X POST "http://localhost:$RPORT1/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"codex\",\"session_id\":\"$RX\",\"dedupe_key\":\"codex:$RX\",\"name\":\"灾备甲\",\"total_tokens\":100,\"observed_at\":\"$(iso_local 9)\"}" >/dev/null
+curl -s -X POST "http://localhost:$RPORT1/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"codex\",\"session_id\":\"$RX\",\"dedupe_key\":\"codex:$RX\",\"name\":\"灾备甲\",\"total_tokens\":150,\"quota_reached\":\"primary\",\"observed_at\":\"$(iso_local 10)\"}" >/dev/null
+curl -s -X POST "http://localhost:$RPORT1/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"codex\",\"session_id\":\"$RX\",\"dedupe_key\":\"codex:$RX\",\"name\":\"灾备甲\",\"total_tokens\":150,\"observed_at\":\"$(iso_local 11)\"}" >/dev/null
+curl -s -X POST "http://localhost:$RPORT1/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"claude-code\",\"session_id\":\"${RX}-c\",\"dedupe_key\":\"claude-code:${RX}-c\",\"name\":\"灾备乙\",\"total_tokens\":200,\"observed_at\":\"$(iso_local 9 30)\"}" >/dev/null
+# 等异步归档:轮询 fake 日志直到 4 条 PUT(或超时)。条件用干净的 wc -l(缺失回退 0)。
+for _ in $(seq 1 40); do [ "$(wc -l < "$RFAKE_LOG" 2>/dev/null || echo 0)" -ge 4 ] && break; sleep 0.2; done
+[ "$(wc -l < "$RFAKE_LOG" | tr -d ' ')" -ge 4 ] && ok "T30 4 条事件已归档 S3" || no "T30 归档" ">=4 PUT" "$(wc -l < "$RFAKE_LOG" | tr -d ' ')"
+STATS_BEFORE="$(curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:$RPORT1/stats")"
+# 灾难恢复:从 S3 拉回全部 event
+( cd "$REPO/server" && VANTAGE_S3_BUCKET="test-bucket" VANTAGE_S3_REGION="us-east-1" \
+    VANTAGE_S3_ENDPOINT="http://localhost:$RFAKE" \
+    AWS_ACCESS_KEY_ID="AKIDEXAMPLE" AWS_SECRET_ACCESS_KEY="testsecret" \
+    npm run restore:s3 -- "$RESTORED" >"$WORK/restore.log" 2>&1 )
+assert "T30 restore 拉回行数 = 原始" "$(wc -l < "$RDIR1/usage.jsonl" | tr -d ' ')" "$(wc -l < "$RESTORED" | tr -d ' ')"
+# 第二台服务器:用恢复文件当 usage.jsonl,replay(不开 S3)
+cp "$RESTORED" "$RDIR2/usage.jsonl"
+( cd "$REPO/server" && VANTAGE_DATA_DIR="$RDIR2" INGEST_TOKEN="$TOKEN" PORT="$RPORT2" npm start >"$WORK/r2.log" 2>&1 ) & RPID2=$!
+for _ in $(seq 1 40); do curl -sf "http://localhost:$RPORT2/health" >/dev/null 2>&1 && break; sleep 0.3; done
+STATS_AFTER="$(curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:$RPORT2/stats")"
+killp "$RPORT1" "$RPORT2" "$RFAKE"   # 按端口杀,连 tsx 子进程一起清(只 kill npm 父进程杀不掉)
+printf '%s' "$STATS_BEFORE" > "$WORK/sb.json"; printf '%s' "$STATS_AFTER" > "$WORK/sa.json"
+CMP="$(node -e '
+  const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  const b=JSON.parse(require("fs").readFileSync(process.argv[2],"utf8"));
+  // 规范化后比对:总量/会话数/当前额度/撞墙三字段(today+7d+last)都纳入等价判定
+  const norm=(s)=>{const m={};for(const u of (s.users||[]))m[u.name]={t:u.total_tokens,s:u.sessions,q:u.quota_reached,h:u.hit_wall_today,w:u.hit_wall_7d,l:u.last_wall_hit};return{ts:s.total_sessions,u:m};};
+  process.stdout.write(JSON.stringify(norm(a))===JSON.stringify(norm(b))?"EQUAL":"DIFF");
+' "$WORK/sb.json" "$WORK/sa.json")"
+assert "T30 恢复后 /stats 与原始等价(总量/会话数/额度/撞墙)" "EQUAL" "$CMP"
+
+echo ""
+echo "== T31: 撞墙判定按本地日(本地深夜=UTC 次日,仍算今天) =="
+# 本地今天 23:30 的墙,在负偏移时区(如本机 EDT)对应 UTC 次日。按"本地日"应仍算今天撞墙;
+# 若错用 UTC 日,它会落到"明天"、hit_wall_today=false。(UTC 机器上仍是 UTC 当天,新旧逻辑都为 true。)
+SID31="t31-$(date +%s)"
+curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"codex\",\"session_id\":\"$SID31\",\"dedupe_key\":\"codex:$SID31\",\"name\":\"时区测试\",\"quota_reached\":\"primary\",\"observed_at\":\"$(iso_local 23 30)\"}" >/dev/null
+sleep 0.3
+STATS31="$(curl -s -H "Authorization: Bearer $TOKEN" "$LIVE/stats")"
+u31(){ echo "$STATS31" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=(JSON.parse(s).users||[]).find(x=>x.name==="时区测试");process.stdout.write(u==null?"MISSING":String(u[process.argv[1]]))})' "$1"; }
+assert "T31 本地深夜撞墙按本地日算今天" "true" "$(u31 hit_wall_today)"
+
+echo ""
+echo "== T32: 当前额度按 effective_ts 取最新(迟到的旧额度快照不顶回新的,§6.2) =="
+# B 先传(30%,快照较新 observed_at=12),A 后传(95%,快照较旧 observed_at=10)。
+# A 后到 -> received_at 更晚,但 observed_at 更旧。按 effective_ts 应取 B(30%);
+# 若错用 ended_at||received_at 会错取 A(95%)。
+SID32B="t32b-$(date +%s)"
+SID32A="t32a-$(date +%s)"
+curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"codex\",\"session_id\":\"$SID32B\",\"dedupe_key\":\"codex:$SID32B\",\"name\":\"额度新旧\",\"quota_primary_pct\":30,\"observed_at\":\"$(iso_local 12)\"}" >/dev/null
+curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"codex\",\"session_id\":\"$SID32A\",\"dedupe_key\":\"codex:$SID32A\",\"name\":\"额度新旧\",\"quota_primary_pct\":95,\"observed_at\":\"$(iso_local 10)\"}" >/dev/null
+sleep 0.3
+STATS32="$(curl -s -H "Authorization: Bearer $TOKEN" "$LIVE/stats")"
+u32(){ echo "$STATS32" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=(JSON.parse(s).users||[]).find(x=>x.name==="额度新旧");process.stdout.write(u==null?"MISSING":String(u[process.argv[1]]))})' "$1"; }
+assert "T32 当前额度取 effective_ts 最新=30%" "30" "$(u32 quota_primary_pct)"
 
 echo ""
 echo "======================================================"
