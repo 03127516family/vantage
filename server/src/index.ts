@@ -1,6 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { upsert, allSessions, type UsageRecord } from "./store.ts";
+import { redactRecord } from "./redact.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const DEFAULT_TOKEN = "dev-token-change-me";
@@ -174,6 +175,7 @@ const server = createServer(async (req, res) => {
       let n = 0;
       for (const r of records) {
         if (r && typeof r === "object") {
+          redactRecord(r); // 复查脱敏:采集端 redact 之外的兜底(spec §8)
           upsert(r);
           n += 1;
         }

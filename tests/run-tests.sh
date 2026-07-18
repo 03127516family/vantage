@@ -290,6 +290,15 @@ HOME="$SB8" VANTAGE_SKIP_TRIGGER=1 node "$REPO/plugin/setup.cjs" "李栋" "a@b.c
 assert "T23 误传邮箱 -> 退出码 1" "1" "$RC23b"
 
 echo ""
+echo "== T25: 服务端复查脱敏(采集端漏网的,服务端兜底) =="
+SID25="t25-$(date +%s)"
+curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d "{\"tool\":\"claude-code\",\"session_id\":\"$SID25\",\"dedupe_key\":\"claude-code:$SID25\",\"name\":\"脱敏测试\",\"first_prompt\":\"联系我 someone@example.com\",\"summary\":\"正常摘要\"}" >/dev/null
+sleep 0.3
+assert "T25 first_prompt 被服务端脱敏" "联系我 [email]" "$($Q field "$SID25" first_prompt)"
+assert "T25 summary 不受影响"        "正常摘要"        "$($Q field "$SID25" summary)"
+
+echo ""
 echo "======================================================"
 echo " 结果: PASS=$PASS  FAIL=$FAIL"
 echo "======================================================"
