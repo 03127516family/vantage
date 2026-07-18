@@ -71,7 +71,7 @@ async function main() {
     machine: cfg.machine,
     exit_reason: exitReason,
     dedupe_key: `${parsed.tool}:${parsed.session_id}`,
-    collected_at: new Date().toISOString(),
+    observed_at: new Date().toISOString(), // 快照生成时间(服务端据此判断新旧;旧名 collected_at)
   };
 
   // 4) 落 spool（同会话覆盖，原子写）

@@ -212,7 +212,7 @@ async function main() {
         machine: cfg.machine,
         exit_reason: "reconciled", // 标记：兜底对账补采
         dedupe_key: `${parsed.tool}:${parsed.session_id}`,
-        collected_at: new Date().toISOString(),
+        observed_at: new Date().toISOString(), // 快照生成时间(服务端据此判断新旧;旧名 collected_at)
       };
       core.writeSpool(record);
       core.markProcessed(file, st.size, st.mtimeMs);
