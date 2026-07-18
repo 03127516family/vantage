@@ -65,8 +65,13 @@ vantage/
 │   ├── run-tests.sh · qserver.cjs · fixtures/
 └── server/                       # dgcrane 自建后端（Node/TS）
     ├── src/{index,store}.ts      #   /ingest /stats /health（均鉴权）+ JSONL upsert
+    ├── src/{s3,archive}.ts       #   S3 异步归档（不可变事件；未配置 S3 环境变量则停用）
+    ├── scripts/                  #   npm run smoke:s3（冒烟）/ restore:s3（灾难恢复）
     └── data/                     #   usage.jsonl（运行时生成）
 ```
+
+> 上报在写本地 JSONL 的同时异步归档到 AWS S3（append-only 不可变事件，撞墙历史永不丢）。
+> 部署见 [docs/s3-setup.md](docs/s3-setup.md)，设计见 [docs/superpowers/specs/2026-07-17-s3-storage-design.md](docs/superpowers/specs/2026-07-17-s3-storage-design.md)。
 
 ---
 
