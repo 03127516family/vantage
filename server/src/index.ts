@@ -1,7 +1,9 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { upsert, allSessions, type UsageRecord } from "./store.ts";
+import { upsert, allSessions, jsonlPath, type UsageRecord } from "./store.ts";
 import { redactRecord } from "./redact.ts";
+import { initArchive } from "./archive.ts";
+import { s3ConfigFromEnv } from "./s3.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const DEFAULT_TOKEN = "dev-token-change-me";
@@ -38,6 +40,9 @@ function readBody(req: IncomingMessage, limit = 5 * 1024 * 1024): Promise<string
     req.on("error", reject);
   });
 }
+
+// S3 归档:异步、不阻塞 /ingest;未配置环境变量时为 no-op(spec §8)
+const archive = initArchive({ jsonlPath, cfg: s3ConfigFromEnv() });
 
 // 简单聚合，供快速自查（正式看板以后再做）
 function buildStats() {
@@ -176,7 +181,8 @@ const server = createServer(async (req, res) => {
       for (const r of records) {
         if (r && typeof r === "object") {
           redactRecord(r); // 复查脱敏:采集端 redact 之外的兜底(spec §8)
-          upsert(r);
+          const stored = upsert(r);
+          archive.enqueue(stored); // 异步归档 S3,失败由对账器兜底
           n += 1;
         }
       }
