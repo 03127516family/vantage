@@ -7,9 +7,11 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "node --import tsx --test src/ulid.test.ts src/redact.test.ts src/store.test.ts"
+    "test": "node --import tsx --test src/ulid.test.ts src/redact.test.ts src/store.test.ts src/s3.test.ts"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1090.0"
+  },
   "devDependencies": {
     "@types/node": "^22.10.5",
     "tsx": "^4.19.2",
