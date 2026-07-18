@@ -8,8 +8,8 @@ const cfg = s3ConfigFromEnv();
 if (!cfg.enabled) { console.error("未配置 S3 环境变量"); process.exit(1); }
 const out = process.argv[2] ?? "data/usage-restored.jsonl";
 
-console.log("LIST events/ ...");
-const list = await listKeys(cfg, "events/");
+console.log(`LIST ${cfg.prefix}events/ ...`);
+const list = await listKeys(cfg, `${cfg.prefix}events/`);
 if (list.status !== 200) { console.error(`LIST 失败 status=${list.status}`); process.exit(1); }
 console.log(`共 ${list.keys.length} 个 event,开始下载...`);
 

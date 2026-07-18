@@ -9,7 +9,7 @@ if (!cfg.enabled) {
   process.exit(1);
 }
 const now = new Date().toISOString();
-const key = `events/dt=${now.slice(0, 10)}/smoke_${ulid()}_codex.json`;
+const key = `${cfg.prefix}events/dt=${now.slice(0, 10)}/smoke_${ulid()}_codex.json`;
 const body = JSON.stringify({ smoke: true, at: now });
 
 const put = await putObject(cfg, key, body);
@@ -20,6 +20,6 @@ const get = await getObject(cfg, key);
 console.log(`GET -> ${get.status} 内容一致=${get.body === body}`);
 if (get.status !== 200 || get.body !== body) process.exit(1);
 
-const list = await listKeys(cfg, "events/");
-console.log(`LIST events/ -> ${list.status} 共 ${list.keys.length} 个 key,包含冒烟 key=${list.keys.includes(key)}`);
+const list = await listKeys(cfg, `${cfg.prefix}events/`);
+console.log(`LIST ${cfg.prefix}events/ -> ${list.status} 共 ${list.keys.length} 个 key,包含冒烟 key=${list.keys.includes(key)}`);
 process.exit(list.status === 200 && list.keys.includes(key) ? 0 : 1);

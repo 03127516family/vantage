@@ -15,6 +15,13 @@ export interface S3Config {
   endpoint: string; // 空串 = SDK 按 region 自动解析(推荐;aws-cn 只改 region 即可)
   accessKeyId: string;
   secretAccessKey: string;
+  prefix: string; // 桶内前缀(如 "vantage-prod/"),空串 = 桶根;事件写到 <prefix>events/ 下
+}
+
+/** 归一化前缀:去首尾斜杠,非空补尾斜杠;空 -> ""。 */
+function normalizePrefix(p: string): string {
+  const t = p.replace(/^\/+/, "").replace(/\/+$/, "");
+  return t ? `${t}/` : "";
 }
 
 export function s3ConfigFromEnv(env: NodeJS.ProcessEnv = process.env): S3Config {
@@ -29,6 +36,7 @@ export function s3ConfigFromEnv(env: NodeJS.ProcessEnv = process.env): S3Config 
     endpoint: env.VANTAGE_S3_ENDPOINT ?? "",
     accessKeyId,
     secretAccessKey,
+    prefix: normalizePrefix(env.VANTAGE_S3_PREFIX ?? ""),
   };
 }
 

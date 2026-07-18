@@ -38,3 +38,11 @@ test("s3ConfigFromEnv: VANTAGE_S3_ENDPOINT 仅测试用(如 fake-s3)", () => {
   });
   assert.equal(c.endpoint, "http://localhost:4999");
 });
+
+test("s3ConfigFromEnv: VANTAGE_S3_PREFIX 归一化为带尾斜杠前缀(默认空=桶根)", () => {
+  const base = { VANTAGE_S3_BUCKET: "b", AWS_ACCESS_KEY_ID: "AK", AWS_SECRET_ACCESS_KEY: "SK" };
+  assert.equal(s3ConfigFromEnv(base).prefix, ""); // 默认空前缀 -> 事件在桶根 events/
+  assert.equal(s3ConfigFromEnv({ ...base, VANTAGE_S3_PREFIX: "vantage-prod" }).prefix, "vantage-prod/");
+  assert.equal(s3ConfigFromEnv({ ...base, VANTAGE_S3_PREFIX: "/vantage-prod/" }).prefix, "vantage-prod/");
+  assert.equal(s3ConfigFromEnv({ ...base, VANTAGE_S3_PREFIX: "team/vantage" }).prefix, "team/vantage/");
+});

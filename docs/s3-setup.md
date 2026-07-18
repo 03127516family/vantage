@@ -2,13 +2,16 @@
 
 后端在写本地 `usage.jsonl` 的同时，把每次上报异步归档为 S3 不可变事件（append-only，撞墙历史永不丢）。本地 JSONL 仍是热数据，S3 是归档层。设计细节见 `docs/superpowers/specs/2026-07-17-s3-storage-design.md`。
 
-## 1. 创建 S3 桶
+## 1. 准备桶与前缀
 
-AWS 控制台 → S3 → Create bucket：
+两种部署方式二选一：
 
-- Bucket name：`vantage-prod`
-- Region：公司就近（如新加坡 `ap-southeast-1`；中国区域见文末备注）
-- **Block Public Access：四项全部保持开启**（默认）
+- **独立桶**（隔离最干净）：AWS 控制台 → S3 → Create bucket，名 `vantage-prod`。
+- **已有桶 + 前缀**：直接用你现有的桶，约定一个前缀（如 `vantage-prod/`），事件写到 `<前缀>events/` 下（S3 没有真文件夹，前缀就是"文件夹"）。此时第 3 步 `VANTAGE_S3_BUCKET` 填已有桶名、`VANTAGE_S3_PREFIX` 填 `vantage-prod`。
+
+Region 选公司就近（如新加坡 `ap-southeast-1`；中国区域见文末备注）。无论哪种方式，桶的设置：
+
+- **Block Public Access：四项全部保持开启**（数据含 PII，必须私有）
 - 默认加密：SSE-S3（默认，免费）
 - **Bucket Versioning：不开**（append-only 用不到）
 - 不设生命周期规则、不转存储层（数据量小，全部 Standard 最便宜）
@@ -17,7 +20,7 @@ AWS 控制台 → S3 → Create bucket：
 
 IAM → Users → Create user：名称 `vantage-archiver`，只勾选**编程访问（Access key）**，不勾控制台访问。
 
-附加内联策略（最小权限，不给 DeleteObject）：
+附加内联策略（最小权限，不给 DeleteObject）。把 `<BUCKET>` 换成你的桶名；用前缀时保留 `vantage-prod/` 那段并换成你的前缀，独立桶则把两段里的 `vantage-prod/` 去掉：
 
 ```json
 {
@@ -26,13 +29,13 @@ IAM → Users → Create user：名称 `vantage-archiver`，只勾选**编程访
     {
       "Effect": "Allow",
       "Action": ["s3:PutObject", "s3:GetObject"],
-      "Resource": "arn:aws:s3:::vantage-prod/events/*"
+      "Resource": "arn:aws:s3:::<BUCKET>/vantage-prod/events/*"
     },
     {
       "Effect": "Allow",
       "Action": ["s3:ListBucket"],
-      "Resource": "arn:aws:s3:::vantage-prod",
-      "Condition": { "StringLike": { "s3:prefix": ["events/*"] } }
+      "Resource": "arn:aws:s3:::<BUCKET>",
+      "Condition": { "StringLike": { "s3:prefix": ["vantage-prod/events/*"] } }
     }
   ]
 }
@@ -45,8 +48,9 @@ IAM → Users → Create user：名称 `vantage-archiver`，只勾选**编程访
 后端服务器（192.168.20.15）上，为运行后端的环境设置：
 
 ```bash
-VANTAGE_S3_BUCKET=vantage-prod
-VANTAGE_S3_REGION=ap-southeast-1          # 建桶时选的 region
+VANTAGE_S3_BUCKET=vantage-prod          # 独立桶填 vantage-prod;已有桶填你的已有桶名
+VANTAGE_S3_PREFIX=vantage-prod          # 仅"已有桶+前缀"时需要;独立桶留空或不设
+VANTAGE_S3_REGION=ap-southeast-1        # 桶所在 region
 AWS_ACCESS_KEY_ID=<第 2 步的 Access Key ID>
 AWS_SECRET_ACCESS_KEY=<第 2 步的 Secret Access Key>
 # 可选:

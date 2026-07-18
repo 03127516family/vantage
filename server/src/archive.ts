@@ -35,12 +35,12 @@ interface ArchiveOpts {
   log?: (msg: string) => void;
 }
 
-/** S3 key(spec §3):events/dt=<received_at 的 UTC 日期>/<紧凑时间>_<event_id>_<tool>.json */
-export function eventKey(rec: StoredRecord): string {
+/** S3 key(spec §3):<prefix>events/dt=<received_at 的 UTC 日期>/<紧凑时间>_<event_id>_<tool>.json */
+export function eventKey(rec: StoredRecord, prefix = ""): string {
   const dt = rec.received_at.slice(0, 10); // 2026-07-17
   const compact = rec.received_at.replace(/[-:]/g, ""); // 20260717T093012.015Z
   const tool = (rec.tool ?? "unknown").replace(/[^A-Za-z0-9-]/g, "-");
-  return `events/dt=${dt}/${compact}_${rec.event_id}_${tool}.json`;
+  return `${prefix}events/dt=${dt}/${compact}_${rec.event_id}_${tool}.json`;
 }
 
 export function initArchive(opts: ArchiveOpts): ArchiveHandle {
@@ -83,9 +83,9 @@ export function initArchive(opts: ArchiveOpts): ArchiveHandle {
       return true; // 损坏行不重试,跳过
     }
     if (!rec.event_id || !rec.received_at) return true; // 老行(无信封)不归档,跳过
-    const res = await putter(eventKey(rec), line);
+    const res = await putter(eventKey(rec, opts.cfg.prefix), line);
     if (res.status >= 200 && res.status < 300) return true;
-    log(`PUT 失败 status=${res.status} key=${eventKey(rec)}`);
+    log(`PUT 失败 status=${res.status} key=${eventKey(rec, opts.cfg.prefix)}`);
     return false;
   }
 

@@ -35,6 +35,14 @@ test("eventKey: events/dt=<received日期>/<紧凑时间>_<event_id>_<tool>.json
   );
 });
 
+test("eventKey: 带前缀时拼到 events/ 之前(默认空前缀=桶根)", () => {
+  assert.equal(
+    eventKey(stored({}), "vantage-prod/"),
+    "vantage-prod/events/dt=2026-07-17/20260717T093012.015Z_01J9X7K2M4000000000000AB_codex.json"
+  );
+  assert.equal(eventKey(stored({}), ""), "events/dt=2026-07-17/20260717T093012.015Z_01J9X7K2M4000000000000AB_codex.json");
+});
+
 test("enqueue: worker 异步 PUT,内容=事件 JSON;drain 后已完成", async () => {
   const { jsonlPath } = setup();
   const puts: { key: string; body: string }[] = [];
