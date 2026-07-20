@@ -202,6 +202,19 @@ function spawnDetached(scriptName) {
   }
 }
 
+/** 分离式跑一段 shell 命令串（如插件自更新检查）：不等待、不阻塞钩子，输出由命令串自行重定向。 */
+function spawnShellDetached(command) {
+  try {
+    const child = spawn("sh", ["-c", command], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  } catch {
+    /* ignore */
+  }
+}
+
 module.exports = {
   BASE_DIR,
   CONFIG_PATH,
@@ -224,4 +237,5 @@ module.exports = {
   postJson,
   readStdin,
   spawnDetached,
+  spawnShellDetached,
 };

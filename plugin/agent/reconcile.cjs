@@ -20,6 +20,12 @@ const RECENT_DAYS = Number(process.env.VANTAGE_RECENT_DAYS || 7);
 const THROTTLE_MS = Number(process.env.VANTAGE_RECONCILE_INTERVAL_MIN || 30) * 60 * 1000;
 // 死信/损坏文件保留天数
 const RETENTION_DAYS = Number(process.env.VANTAGE_RETENTION_DAYS || 14);
+// 插件自更新节流：SessionStart 时后台跑官方 CLI 检查更新（marketplace update + plugin update），
+// 默认 24h 一次。版本串未 bump 则官方判定"已是最新"、空跑一次无妨；有新版则落盘、下次会话生效。
+const SELF_UPDATE_INTERVAL_MS = Number(process.env.VANTAGE_SELF_UPDATE_INTERVAL_H || 24) * 3600 * 1000;
+// marketplace 名 / 插件 ID（与 .claude-plugin/marketplace.json 一致）
+const MARKETPLACE = process.env.VANTAGE_MARKETPLACE || "dgcrane";
+const PLUGIN_ID = `vantage@${MARKETPLACE}`;
 
 // 要扫描的数据源：目录 + 解析器 + 工具名
 const SOURCES = [
@@ -35,11 +41,21 @@ const SOURCES = [
   },
 ];
 
+// 真实路径比较：HOME 或中间目录可能是符号链接（如 macOS 的 /var -> /private/var），
+// Node 加载主模块默认 realpath，而 os.homedir() 照抄 $HOME——直接比字符串会漏判。
+function realPath(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 // 若本脚本从插件目录运行（Claude 钩子），把 agent 同步到稳定副本 ~/.vantage/agent，
 // 供 Codex 定时任务引用——这样插件更新后 Codex 那份也是最新的。
 function syncStableCopy() {
   const dst = path.join(os.homedir(), ".vantage", "agent");
-  if (path.resolve(__dirname) === path.resolve(dst)) return; // 本就是稳定副本，无需同步
+  if (realPath(__dirname) === realPath(dst)) return; // 本就是稳定副本，无需同步
   try {
     // 仅当稳定副本缺失或比插件版旧时才复制，避免每次 SessionStart 无谓 I/O。
     const srcMtime = fs.statSync(path.join(__dirname, "core.cjs")).mtimeMs;
@@ -52,6 +68,30 @@ function syncStableCopy() {
     if (dstMtime >= srcMtime) return;
     fs.mkdirSync(dst, { recursive: true });
     fs.cpSync(__dirname, dst, { recursive: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+// 插件自更新：后台静默跑官方 CLI 刷新 marketplace 并更新 cache 里的插件，新版本下次会话生效
+// （CLAUDE_PLUGIN_ROOT 在会话启动时已固定，本会话拿不到新版）。官方版本串对比：plugin.json 的
+// version 未 bump 则"已是最新"跳过。先盖章再派生，并发会话不重复检查；失败咽下，绝不影响采集。
+// 只在插件目录运行时做（Claude 钩子路径）；~/.vantage/agent 稳定副本（Codex 触发器）不管这事。
+function selfUpdate() {
+  if (process.env.VANTAGE_DISABLE_SELF_UPDATE) return; // 测试/运维逃生开关
+  const stableCopy = path.join(os.homedir(), ".vantage", "agent");
+  if (realPath(__dirname) === realPath(stableCopy)) return;
+  try {
+    const state = core.readState();
+    const last = Number(state.__last_self_update__ || 0);
+    if (Date.now() - last < SELF_UPDATE_INTERVAL_MS) return;
+    state.__last_self_update__ = Date.now();
+    core.writeState(state);
+    const check =
+      process.env.VANTAGE_SELF_UPDATE_CMD ||
+      `claude plugin marketplace update ${MARKETPLACE} && claude plugin update ${PLUGIN_ID}`;
+    core.spawnShellDetached(`${check} >>${JSON.stringify(core.LOG_PATH)} 2>&1`);
+    core.log("self-update: check spawned");
   } catch {
     /* ignore */
   }
@@ -134,6 +174,7 @@ async function main() {
   }
 
   syncStableCopy(); // 从插件目录运行时，刷新 Codex 用的稳定副本（节流前做，插件更新及时生效）
+  selfUpdate(); // 同在节流前：24h 一次后台查插件更新，新版本下次会话生效
 
   // 节流：SessionStart 是高频路径，30 分钟内已全量扫过就不再空转。
   // 仍触发一次 flush——若 spool 里有断网滞留的记录，网络恢复后开会话即补传，不等下轮扫描。
