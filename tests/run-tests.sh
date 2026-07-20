@@ -24,6 +24,8 @@ TOKEN="test-token"
 Q="node $SCRIPT_DIR/qserver.cjs $DATA"
 # 测试里 SessionStart 会被密集触发，关掉 reconcile 节流（T24 单独验证节流行为）
 export VANTAGE_RECONCILE_INTERVAL_MIN=0
+# 测试绝不能真去跑 claude CLI 更新插件（T33 单独用替身命令验证自更新行为）
+export VANTAGE_DISABLE_SELF_UPDATE=1
 
 S1="11111111-1111-1111-1111-111111111111"
 S2="22222222-2222-2222-2222-222222222222"
@@ -486,6 +488,35 @@ sleep 0.3
 STATS32="$(curl -s -H "Authorization: Bearer $TOKEN" "$LIVE/stats")"
 u32(){ echo "$STATS32" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=(JSON.parse(s).users||[]).find(x=>x.name==="额度新旧");process.stdout.write(u==null?"MISSING":String(u[process.argv[1]]))})' "$1"; }
 assert "T32 当前额度取 effective_ts 最新=30%" "30" "$(u32 quota_primary_pct)"
+
+echo ""
+echo "== T33: 插件自更新——SessionStart 后台检查一次,24h 节流;稳定副本不检查 =="
+SB10="$WORK/home10"; LOG10="$SB10/.vantage/agent.log"
+mkdir -p "$SB10/.vantage"
+echo '{"server_url":"http://localhost:59999","token":"x"}' > "$SB10/.vantage/config.json"
+fired_n(){ grep -c "vantage-self-update-fired" "$LOG10" 2>/dev/null; }
+# 替身命令代替 claude CLI:输出被 reconcile 重定向进 agent.log,借计数观察触发次数
+START33(){ echo '{"hook_event_name":"SessionStart"}' | HOME="$SB10" VANTAGE_DISABLE_SELF_UPDATE= \
+  VANTAGE_SELF_UPDATE_CMD='echo vantage-self-update-fired' "$@" node "$AGENT/reconcile.cjs"; sleep 0.6; }
+# 1) 首次 SessionStart:触发一次后台检查
+START33 env
+assert "T33 首次 SessionStart 触发自更新检查" "1" "$(fired_n)"
+grep -q "self-update: check spawned" "$LOG10" && ok "T33 日志记录 check spawned" || no "T33 spawned 日志" "check spawned" "无"
+# 2) 24h 内第二次:被节流,不再触发
+START33 env
+assert "T33 24h 内第二次被节流" "1" "$(fired_n)"
+# 3) 间隔调 0:每次 SessionStart 都检查(验证节流间隔可调)
+START33 env VANTAGE_SELF_UPDATE_INTERVAL_H=0
+assert "T33 间隔调 0 后再次触发" "2" "$(fired_n)"
+# 4) 稳定副本路径(Codex 触发器跑的那份)不做自更新
+mkdir -p "$SB10/.vantage/agent"; cp "$AGENT"/*.cjs "$SB10/.vantage/agent/"; mkdir -p "$SB10/.vantage/agent/parsers"; cp "$AGENT"/parsers/*.cjs "$SB10/.vantage/agent/parsers/"
+echo '{"hook_event_name":"SessionStart"}' | HOME="$SB10" VANTAGE_DISABLE_SELF_UPDATE= \
+  VANTAGE_SELF_UPDATE_CMD='echo vantage-self-update-fired' VANTAGE_SELF_UPDATE_INTERVAL_H=0 \
+  node "$SB10/.vantage/agent/reconcile.cjs"; sleep 0.6
+assert "T33 稳定副本路径不自更新" "2" "$(fired_n)"
+# 5) 总开关:禁用后即使间隔为 0 也不触发
+START33 env VANTAGE_SELF_UPDATE_INTERVAL_H=0 VANTAGE_DISABLE_SELF_UPDATE=1
+assert "T33 VANTAGE_DISABLE_SELF_UPDATE=1 禁用" "2" "$(fired_n)"
 
 echo ""
 echo "======================================================"
