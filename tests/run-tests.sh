@@ -37,7 +37,7 @@ kill_port() { lsof -ti tcp:"$PORT" 2>/dev/null | xargs kill -9 2>/dev/null; }
 # 按端口逐个杀(多个端口不能写成 lsof -ti tcp:a b c,会被当文件名参数;逐个才稳)。
 # T30 起的额外服务器/fake-s3 用:npm start 派生 tsx 子进程,kill 父进程杀不掉,必须按端口清。
 killp(){ for pp in "$@"; do lsof -ti tcp:"$pp" 2>/dev/null | xargs kill -9 2>/dev/null; done; }
-cleanup() { [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null; kill_port; killp 3971 3972 4971; rm -rf "$WORK"; }
+cleanup() { [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null; kill_port; killp 3971 3972 4971 4972; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 # --- 沙箱会话文件 ---
@@ -517,6 +517,66 @@ assert "T33 稳定副本路径不自更新" "2" "$(fired_n)"
 # 5) 总开关:禁用后即使间隔为 0 也不触发
 START33 env VANTAGE_SELF_UPDATE_INTERVAL_H=0 VANTAGE_DISABLE_SELF_UPDATE=1
 assert "T33 VANTAGE_DISABLE_SELF_UPDATE=1 禁用" "2" "$(fired_n)"
+
+echo ""
+echo "== T34-T36: Lambda 路径(ingest→rebuild→stats,fake-s3 往返,水位线增量) =="
+LFAKE=4972; LFAKE_LOG="$WORK/lfake-put.jsonl"; LREAD_LOG="$WORK/lfake-read.jsonl"
+killp "$LFAKE"
+node "$SCRIPT_DIR/fake-s3.cjs" "$LFAKE" "$LFAKE_LOG" "$LREAD_LOG" &
+sleep 0.3
+# 调一次 Lambda(每次新进程=冷启动;env 指向 fake-s3,前缀 lt/)
+LD() { ( cd "$REPO/server" && \
+  VANTAGE_S3_BUCKET="test-bucket" VANTAGE_S3_PREFIX="lt" VANTAGE_S3_REGION="us-east-1" \
+  VANTAGE_S3_ENDPOINT="http://localhost:$LFAKE" AWS_ACCESS_KEY_ID="x" AWS_SECRET_ACCESS_KEY="y" \
+  INGEST_TOKEN="$TOKEN" node --import tsx "$SCRIPT_DIR/lambda-driver.mjs" "$1" 2>>"$WORK/lambda-driver.err" ); }
+mkpost(){ node -e 'const fs=require("fs");fs.writeFileSync(process.argv[3],JSON.stringify({requestContext:{http:{method:"POST"}},rawPath:"/ingest",headers:{authorization:"Bearer "+process.argv[1]},body:process.argv[2]}))' "$TOKEN" "$1" "$2"; }
+mkget(){ node -e 'const fs=require("fs");fs.writeFileSync(process.argv[2],JSON.stringify({requestContext:{http:{method:"GET"}},rawPath:"/stats",headers:{authorization:"Bearer "+process.argv[1]}}))' "$TOKEN" "$1"; }
+mkev(){ node -e 'require("fs").writeFileSync(process.argv[2],process.argv[1])' "$1" "$2"; }
+jget(){ node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s)[process.argv[1]])))' "$1"; }         # 顶层字段
+jbod(){ node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(JSON.parse(s).body);process.stdout.write(String(v[process.argv[1]]))})' "$1"; } # body 内字段
+ulam(){ node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(JSON.parse(s).body);const u=(v.users||[]).find(x=>x.name===process.argv[1]);process.stdout.write(u==null?"MISSING":String(u[process.argv[2]]))})' "$1" "$2"; } # users[姓名].字段
+
+echo "-- T34: 显式 rebuild 全链路(合并+额度) --"
+LX="t34-$(date +%s)"
+mkpost "{\"tool\":\"codex\",\"session_id\":\"$LX\",\"dedupe_key\":\"codex:$LX\",\"name\":\"λ甲\",\"total_tokens\":100,\"observed_at\":\"$(iso_local 9)\"}" "$WORK/le1.json"
+mkpost "{\"tool\":\"codex\",\"session_id\":\"$LX\",\"dedupe_key\":\"codex:$LX\",\"name\":\"λ甲\",\"total_tokens\":150,\"quota_primary_pct\":88,\"observed_at\":\"$(iso_local 10)\"}" "$WORK/le2.json"
+mkpost "{\"tool\":\"claude-code\",\"session_id\":\"$LX-c\",\"dedupe_key\":\"claude-code:$LX-c\",\"name\":\"λ乙\",\"total_tokens\":200,\"observed_at\":\"$(iso_local 9 30)\"}" "$WORK/le3.json"
+mkev "{\"action\":\"rebuild\"}" "$WORK/lrb.json"
+A1="$(LD "$WORK/le1.json")"; A2="$(LD "$WORK/le2.json")"; A3="$(LD "$WORK/le3.json")"
+assert "T34 ingest#1 200"        "200" "$(echo "$A1" | jget statusCode)"
+assert "T34 ingest#3 200"        "200" "$(echo "$A3" | jget statusCode)"
+RB="$(LD "$WORK/lrb.json")"
+assert "T34 rebuild newEvents=3" "3"   "$(echo "$RB" | jbod newEvents)"
+mkget "$WORK/lst.json"; ST="$(LD "$WORK/lst.json")"
+assert "T34 stats 200"           "200" "$(echo "$ST" | jget statusCode)"
+assert "T34 会话=2(同会话已合并)" "2"   "$(echo "$ST" | jbod total_sessions)"
+assert "T34 甲 token=150(取最新)" "150" "$(echo "$ST" | ulam "λ甲" total_tokens)"
+assert "T34 甲 当前额度=88"       "88"  "$(echo "$ST" | ulam "λ甲" quota_primary_pct)"
+assert "T34 watermark 非空"       "1"   "$(echo "$ST" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(JSON.parse(s).body).watermark?"1":"0"))')"
+
+echo "-- T35: 撞墙历史(撞墙→窗口刷新→/stats 仍记得;/stats 读时自动追平) --"
+LW="t35-$(date +%s)"
+mkpost "{\"tool\":\"codex\",\"session_id\":\"$LW\",\"dedupe_key\":\"codex:$LW\",\"name\":\"λ墙\",\"quota_primary_pct\":100,\"quota_reached\":\"primary\",\"quota_plan\":\"plus\",\"observed_at\":\"$(iso_local 10)\"}" "$WORK/lw1.json"
+mkpost "{\"tool\":\"codex\",\"session_id\":\"$LW\",\"dedupe_key\":\"codex:$LW\",\"name\":\"λ墙\",\"quota_primary_pct\":30,\"quota_reached\":null,\"quota_plan\":\"plus\",\"observed_at\":\"$(iso_local 15)\"}" "$WORK/lw2.json"
+LD "$WORK/lw1.json" >/dev/null; LD "$WORK/lw2.json" >/dev/null
+mkget "$WORK/lws.json"; WST="$(LD "$WORK/lws.json")"   # 不显式 rebuild,/stats 内部先增量追平
+assert "T35 当前额度=30(窗口已刷新)" "30"   "$(echo "$WST" | ulam "λ墙" quota_primary_pct)"
+assert "T35 当前未撞墙"              "null" "$(echo "$WST" | ulam "λ墙" quota_reached)"
+assert "T35 仍记得今天撞过墙"        "true" "$(echo "$WST" | ulam "λ墙" hit_wall_today)"
+assert "T35 本周撞墙"                "true" "$(echo "$WST" | ulam "λ墙" hit_wall_7d)"
+
+echo "-- T36: 水位线增量(只读新事件;LIST 带 start-after) --"
+R1="$(LD "$WORK/lrb.json")"   # T34/T35 已追平,应 0 条新事件
+assert "T36 无新事件 newEvents=0" "0" "$(echo "$R1" | jbod newEvents)"
+mkpost "{\"tool\":\"codex\",\"session_id\":\"$LX-z\",\"dedupe_key\":\"codex:$LX-z\",\"name\":\"λ丙\",\"total_tokens\":5,\"observed_at\":\"$(iso_local 16)\"}" "$WORK/lz1.json"
+LD "$WORK/lz1.json" >/dev/null
+R2="$(LD "$WORK/lrb.json")"
+assert "T36 第二轮只读 1 条新事件" "1" "$(echo "$R2" | jbod newEvents)"
+NSA="$(grep -c 'start-after' "$LREAD_LOG" 2>/dev/null || true)"
+[ "${NSA:-0}" -ge 1 ] && ok "T36 增量 LIST 带 start-after" || no "T36 LIST start-after" ">=1" "${NSA:-0}"
+mkget "$WORK/lfs.json"; FST="$(LD "$WORK/lfs.json")"
+assert "T36 累计会话=4(2+1+1)" "4" "$(echo "$FST" | jbod total_sessions)"
+killp "$LFAKE"
 
 echo ""
 echo "======================================================"

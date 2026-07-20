@@ -8,7 +8,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 
-const [port, logPath] = process.argv.slice(2);
+const [port, logPath, readLogPath] = process.argv.slice(2);
 // 内存对象库:rawPath(去 query) -> body
 const objects = new Map();
 const keyOf = (url) => url.split("?")[0];
@@ -31,21 +31,24 @@ http
         return;
       }
       if (req.method === "GET") {
+        if (readLogPath) fs.appendFileSync(readLogPath, JSON.stringify({ method: "GET", url: req.url }) + "\n");
         const u = new URL(req.url, "http://x");
         const parts = u.pathname.split("/").filter(Boolean); // [bucket] => LIST;[bucket, key...] => GET object
         if (parts.length <= 1) {
-          // ListObjectsV2:回放全部 key(解码后)。SDK 即使按 encoding-type=url 再解码也安全
-          // —— key 只含 = / - . 字母数字,decodeURIComponent 对它们幂等。
+          // ListObjectsV2:回放全部 key(解码后,按字典序——真实 S3 即字典序),支持 prefix 与 start-after
           const prefix = u.searchParams.get("prefix") || "";
-          const keys = [...objects.keys()]
+          const startAfter = u.searchParams.get("start-after") || "";
+          let keys = [...objects.keys()]
             .map((p) => p.split("/").slice(2).join("/")) // path-style:/bucket/key... -> 去 "" 与 bucket
-            .map((k) => decodeURIComponent(k)); // %3D -> =(真实 key)
-          const filtered = prefix ? keys.filter((k) => k.startsWith(prefix)) : keys;
+            .map((k) => decodeURIComponent(k)) // %3D -> =(真实 key)
+            .sort();
+          if (prefix) keys = keys.filter((k) => k.startsWith(prefix));
+          if (startAfter) keys = keys.filter((k) => k > startAfter);
           const xml =
             '<?xml version="1.0" encoding="UTF-8"?>' +
             '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
-            `<KeyCount>${filtered.length}</KeyCount><IsTruncated>false</IsTruncated>` +
-            filtered.map((k) => `<Contents><Key>${k}</Key></Contents>`).join("") +
+            `<KeyCount>${keys.length}</KeyCount><IsTruncated>false</IsTruncated>` +
+            keys.map((k) => `<Contents><Key>${k}</Key></Contents>`).join("") +
             "</ListBucketResult>";
           res.writeHead(200, { "content-type": "application/xml" });
           res.end(xml);
