@@ -9,13 +9,15 @@
     "start": "tsx src/index.ts",
     "test": "node --import tsx --test src/ulid.test.ts src/redact.test.ts src/store.test.ts src/s3.test.ts src/archive.test.ts src/merge.test.ts src/stats.test.ts lambda/ingest.test.ts lambda/rebuild.test.ts lambda/handler.test.ts",
     "smoke:s3": "tsx scripts/s3-smoke.ts",
-    "restore:s3": "tsx scripts/s3-restore.ts"
+    "restore:s3": "tsx scripts/s3-restore.ts",
+    "build:lambda": "esbuild lambda/handler.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/lambda/index.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1090.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "esbuild": "^0.28.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }
