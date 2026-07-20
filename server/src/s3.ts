@@ -82,14 +82,23 @@ export async function getObject(cfg: S3Config, key: string): Promise<{ status: n
   }
 }
 
-/** ListObjectsV2 全量翻页,返回 prefix 下全部 key。 */
-export async function listKeys(cfg: S3Config, prefix: string): Promise<{ status: number; keys: string[] }> {
+/** ListObjectsV2 全量翻页,返回 prefix 下全部 key;startAfter 传水位线时只返回其后的新 key。 */
+export async function listKeys(
+  cfg: S3Config,
+  prefix: string,
+  startAfter?: string
+): Promise<{ status: number; keys: string[] }> {
   const keys: string[] = [];
   let token: string | undefined;
   try {
     do {
       const res = await clientFor(cfg).send(
-        new ListObjectsV2Command({ Bucket: cfg.bucket, Prefix: prefix, ContinuationToken: token })
+        new ListObjectsV2Command({
+          Bucket: cfg.bucket,
+          Prefix: prefix,
+          ContinuationToken: token,
+          ...(startAfter ? { StartAfter: startAfter } : {}),
+        })
       );
       for (const o of res.Contents ?? []) if (o.Key) keys.push(o.Key);
       token = res.IsTruncated ? res.NextContinuationToken : undefined;
