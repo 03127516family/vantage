@@ -17,6 +17,8 @@ import {
 import { join, dirname } from "node:path";
 import { putObject, type S3Config } from "./s3.ts";
 import type { StoredRecord } from "./store.ts";
+import { eventKey } from "./merge.ts";
+export { eventKey }; // 兼容既有调用方与 archive.test.ts
 
 export type Putter = (key: string, body: string) => Promise<{ status: number }>;
 
@@ -33,14 +35,6 @@ interface ArchiveOpts {
   putter?: Putter; // 测试注入;默认真 S3
   sweepIntervalSec?: number; // 默认 600(10 分钟);环境变量 VANTAGE_S3_SWEEP_INTERVAL_SEC 可覆盖
   log?: (msg: string) => void;
-}
-
-/** S3 key(spec §3):<prefix>events/dt=<received_at 的 UTC 日期>/<紧凑时间>_<event_id>_<tool>.json */
-export function eventKey(rec: StoredRecord, prefix = ""): string {
-  const dt = rec.received_at.slice(0, 10); // 2026-07-17
-  const compact = rec.received_at.replace(/[-:]/g, ""); // 20260717T093012.015Z
-  const tool = (rec.tool ?? "unknown").replace(/[^A-Za-z0-9-]/g, "-");
-  return `${prefix}events/dt=${dt}/${compact}_${rec.event_id}_${tool}.json`;
 }
 
 export function initArchive(opts: ArchiveOpts): ArchiveHandle {
