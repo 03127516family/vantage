@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "node --import tsx --test src/ulid.test.ts src/redact.test.ts src/store.test.ts src/s3.test.ts src/archive.test.ts",
+    "test": "node --import tsx --test src/ulid.test.ts src/redact.test.ts src/store.test.ts src/s3.test.ts src/archive.test.ts src/merge.test.ts src/stats.test.ts lambda/ingest.test.ts lambda/rebuild.test.ts lambda/handler.test.ts",
     "smoke:s3": "tsx scripts/s3-smoke.ts",
     "restore:s3": "tsx scripts/s3-restore.ts"
   },
