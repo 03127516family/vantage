@@ -10,7 +10,7 @@
 
 ## 特性
 
-- **Claude Code 插件形态** —— 员工通过内部 marketplace 一键安装，采集逻辑随 `/plugin update` 自动更新。
+- **Claude Code 插件形态** —— 员工通过内部 marketplace 一键安装；插件自更新：每次 SessionStart 后台静默检查（24h 节流），有新版本落盘、下次会话生效，员工零操作。
 - **两个工具，一套管道** —— Claude Code 与 Codex 复用同一套采集/缓冲/上传/去重逻辑，只有会话解析器不同。
 - **自动触发，员工无感** —— 钩子只写本地队列、瞬间返回，绝不阻塞员工；任何异常都咽下、永不干扰。
 - **可靠同步，不丢不重** —— 本地 spool 队列 + 原子写 + 重试，断网/关机不丢；按 `session_id` 去重（upsert），重复触发/重试/对账都不重复计数。
@@ -142,6 +142,7 @@ curl -s -H "Authorization: Bearer <密钥>" http://localhost:3000/stats
 - **不重**：每次上传是该会话的完整快照，后端 upsert 只保留最新。
 - **可靠**：spool 是重试队列，传成功才删；断网/维护时留本地，下次触发补传。
 - **升级安全**：Claude 钩子跑插件内脚本（随插件更新）；Codex 触发器跑 `~/.vantage/agent/` 稳定副本，`reconcile` 每次会把插件版同步过去——Codex 怎么升级都不失效。
+- **自更新**：`reconcile` 在 SessionStart 时后台派生 `claude plugin marketplace update && claude plugin update`（官方 CLI，输出进 `agent.log`，失败咽下），24h 节流、先盖章再派生；稳定副本路径不检查。**发版必须 bump `plugin/.claude-plugin/plugin.json` 的 `version`**——官方按版本串判定更新，光推 commit 不 bump 员工端永远"已是最新"。
 
 **Codex 为何不用 `notify`**：其 `notify` 单槽位且常被自身占用，改写会破坏、升级会重置。改用自己的登录触发器，完全不碰 Codex 配置。
 
@@ -164,6 +165,8 @@ curl -s -H "Authorization: Bearer <密钥>" http://localhost:3000/stats
 | `VANTAGE_RETENTION_DAYS` | 14 | 死信/损坏文件保留天数 |
 | `VANTAGE_SPOOL_MAX_AGE_DAYS` | 7 | spool 超此时长仍失败则进死信 |
 | `VANTAGE_SKIP_TRIGGER` | 0 | setup 时跳过 Codex 触发器（测试用） |
+| `VANTAGE_SELF_UPDATE_INTERVAL_H` | 24 | 插件自更新检查间隔（小时），0=每次 SessionStart 都查 |
+| `VANTAGE_DISABLE_SELF_UPDATE` | 空 | 置非空则关闭插件自更新（测试/运维逃生开关） |
 
 **后端**：`INGEST_TOKEN`、`PORT`、`VANTAGE_DATA_DIR`（数据目录）。
 
