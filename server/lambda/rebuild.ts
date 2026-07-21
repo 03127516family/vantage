@@ -1,5 +1,5 @@
 // Lambda 重建(算账):水位线增量把新事件并入合并索引,重算 stats-view,spec §5.3。
-// 触发方式无关:定时器/手动 invoke//stats 读时都调这一个函数。
+// 触发方式无关:定时器/手动 invoke / /stats 读时都调这一个函数。
 // 写入顺序 index → wallhits → stats-view:watermark 随 view 最后生效,崩溃只导致重复处理(幂等),不丢事件。
 import { createMergeState, mergeInto, type StoredRecord, type WallHit } from "../src/merge.ts";
 import { buildStats } from "../src/stats.ts";
@@ -34,7 +34,18 @@ export async function runRebuild(deps: RebuildDeps): Promise<RebuildResult> {
     deps.get(`${p}state/index.jsonl`),
     deps.get(`${p}state/wallhits.json`),
   ]);
-  const watermark = viewRes.status === 200 ? ((JSON.parse(viewRes.body).watermark as string) ?? "") : "";
+  // view 损坏/水位线类型错 → 按缺失处理:水位线归零全量重放,重写后自愈(否则 503 卡死只能手工删文件)
+  let viewOk = viewRes.status === 200;
+  let watermark = "";
+  if (viewOk) {
+    try {
+      const wm = (JSON.parse(viewRes.body) as { watermark?: unknown }).watermark;
+      watermark = typeof wm === "string" ? wm : "";
+      if (typeof wm !== "string") viewOk = false;
+    } catch {
+      viewOk = false;
+    }
+  }
   const state = createMergeState();
   if (indexRes.status === 200) {
     for (const line of indexRes.body.split("\n")) {
@@ -81,8 +92,8 @@ export async function runRebuild(deps: RebuildDeps): Promise<RebuildResult> {
     }
   }
   const newWatermark = newKeys.length ? newKeys[newKeys.length - 1] : watermark;
-  // 4. 有新事件或 stats-view 缺失 → 重算并按序写回
-  if (newKeys.length > 0 || viewRes.status !== 200) {
+  // 4. 有新事件或 stats-view 缺失/损坏 → 重算并按序写回
+  if (newKeys.length > 0 || !viewOk) {
     const view = {
       ...buildStats([...state.index.values()], state.wallHits, now),
       watermark: newWatermark,

@@ -123,3 +123,24 @@ test("rebuild: LIST 失败 → 抛错", async () => {
   await assert.rejects(runRebuild(deps));
   assert.equal(s3.calls.put.length, 0);
 });
+
+test("rebuild: stats-view 损坏/水位线类型错 → 按缺失处理,全量重放自愈重写", async () => {
+  const s3 = fakeS3({
+    "p/events/dt=2026-07-20/a.json": ev({ dedupe_key: "codex:x", tool: "codex", name: "甲", total_tokens: 7 }),
+  });
+  const deps = depsOf(s3);
+  await runRebuild(deps);
+  // 场景一:view 不是合法 JSON(S3 PUT 原子,现实只会来自外部误写)
+  s3.store.set("p/state/stats-view.json", "{not json");
+  const r1 = await runRebuild(deps);
+  assert.equal(r1.rebuilt, true);
+  let view = JSON.parse(s3.store.get("p/state/stats-view.json")!);
+  assert.equal(view.total_sessions, 1);
+  assert.equal(view.watermark, "p/events/dt=2026-07-20/a.json"); // 全量重放恢复水位线
+  // 场景二:view 合法但 watermark 类型错 → 视同无水位线,同样自愈
+  s3.store.set("p/state/stats-view.json", JSON.stringify({ watermark: 123 }));
+  const r2 = await runRebuild(deps);
+  assert.equal(r2.rebuilt, true);
+  view = JSON.parse(s3.store.get("p/state/stats-view.json")!);
+  assert.equal(view.watermark, "p/events/dt=2026-07-20/a.json");
+});
