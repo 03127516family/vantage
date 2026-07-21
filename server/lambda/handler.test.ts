@@ -91,3 +91,17 @@ test("/ingest 支持 base64 body;坏 JSON → 400", async () => {
   const r2 = await h({ requestContext: { http: { method: "POST" } }, rawPath: "/ingest", headers: AUTH, body: "{oops" });
   assert.equal(r2.statusCode, 400);
 });
+
+test("兼容 API Gateway payload 1.0(REST API / HTTP API 1.0):httpMethod + path 形状", async () => {
+  // 中国区没有 Function URL,入口走 API Gateway;若只给 1.0 形状也要能工作
+  const h = createHandler(fakeDeps(), TOKEN);
+  const health = await h({ httpMethod: "GET", path: "/health" });
+  assert.equal(health.statusCode, 200);
+  const ri = await h({ httpMethod: "POST", path: "/ingest", headers: AUTH, body: JSON.stringify({ tool: "codex", session_id: "r1", dedupe_key: "codex:r1", name: "丙" }) });
+  assert.equal(ri.statusCode, 200);
+  const rs = await h({ httpMethod: "GET", path: "/stats", headers: AUTH });
+  assert.equal(rs.statusCode, 200);
+  assert.equal(JSON.parse(rs.body).total_sessions, 1);
+  const noauth = await h({ httpMethod: "GET", path: "/stats", headers: {} });
+  assert.equal(noauth.statusCode, 401);
+});

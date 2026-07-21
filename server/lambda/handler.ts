@@ -1,4 +1,4 @@
-// Lambda 入口(handler = index.handler):一个函数三条路由,spec §5.1。
+// Lambda 入口(处理程序 = lambda/handler.handler):一个函数三条路由,spec §5.1。
 // createHandler 依赖注入便于测试;默认 handler 用真 S3(env 配置)。
 import { timingSafeEqual } from "node:crypto";
 import { s3ConfigFromEnv, getObject, putObject, listKeys } from "../src/s3.ts";
@@ -48,8 +48,10 @@ export function createHandler(deps: RebuildDeps, token: string) {
         const r = await runRebuild(deps);
         return jsonResponse(200, { ok: true, ...r });
       }
-      const method: string = event?.requestContext?.http?.method ?? "";
-      const path: string = event?.rawPath ?? "";
+      // 事件形状双兼容:Function URL / HTTP API(payload 2.0)用 requestContext.http + rawPath;
+      // REST API / HTTP API(payload 1.0)用 httpMethod + path。headers/body/isBase64Encoded 两者一致。
+      const method: string = event?.requestContext?.http?.method ?? event?.httpMethod ?? "";
+      const path: string = event?.rawPath ?? event?.path ?? "";
       if (method === "GET" && path === "/health") return jsonResponse(200, { ok: true });
 
       if (method === "POST" && path === "/ingest") {
