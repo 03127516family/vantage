@@ -175,6 +175,13 @@ async function main() {
 
   syncStableCopy(); // 从插件目录运行时，刷新 Codex 用的稳定副本（节流前做，插件更新及时生效）
   selfUpdate(); // 同在节流前：24h 一次后台查插件更新，新版本下次会话生效
+  // Windows:Codex 触发器自检自愈——自更新只同步脚本文件,触发器(装没装/机制换没换)
+  // 由这里顺带保证,员工永远不需要为触发器重跑 setup。非 win32 内部直接返回。
+  try {
+    require("./trigger.cjs").ensureWindowsCodexTrigger({ log: core.log });
+  } catch (e) {
+    core.log(`codex 触发器自检异常(已忽略):${e.message}`);
+  }
 
   // 节流：SessionStart 是高频路径，30 分钟内已全量扫过就不再空转。
   // 仍触发一次 flush——若 spool 里有断网滞留的记录，网络恢复后开会话即补传，不等下轮扫描。

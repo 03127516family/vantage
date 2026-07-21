@@ -179,7 +179,7 @@ curl -s -H "Authorization: Bearer <密钥>" http://localhost:3000/stats
 - **死信**：`~/.vantage/dead/`（永久失败/超龄，保留期后自动清）。
 - **卸载**：`/plugin uninstall vantage@dgcrane`；卸载 Codex 触发器
   （mac：`launchctl bootout gui/$(id -u)/com.dgcrane.vantage.codex`；
-  win：`Unregister-ScheduledTask VantageCodexReconcile`；
+  win：删除"启动"文件夹里的 `vantage-codex.vbs`，并 `schtasks /Delete /TN VantageCodexDaily /F`；
   linux：`systemctl --user disable --now vantage-codex.service`）；删 `~/.vantage/`。
 
 ---

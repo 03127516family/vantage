@@ -22,7 +22,13 @@ const AGENT_DST = path.join(BASE_DIR, "agent");
 const TRIGGER_DRYRUN = process.env.VANTAGE_TRIGGER_DRYRUN === "1";
 function register(cmd, argv) {
   if (TRIGGER_DRYRUN) return;
-  execFileSync(cmd, argv, { stdio: "ignore" });
+  try {
+    execFileSync(cmd, argv, { stdio: ["ignore", "ignore", "pipe"] });
+  } catch (e) {
+    // 透出 stderr 里的真实原因(如 schtasks 的"拒绝访问"),不再只报含糊的 Command failed
+    const detail = String(e.stderr || "").trim() || e.message;
+    throw new Error(`${cmd} ${argv.join(" ")}: ${detail}`);
+  }
 }
 
 // 管理员在发布插件前把后端地址/密钥填进 vantage.defaults.json，员工便只需填身份。
@@ -213,27 +219,12 @@ WantedBy=timers.target
   console.log("✓ 已安装 Codex 扫描触发器（systemd timer，开机 + 每天正午，升级安全）");
 }
 
-function installSchtasks(node, reconcile) {
-  // 用 wscript+VBS 隐藏窗口启动：schtasks 直接跑 node.exe 会每次弹一个 cmd 黑窗，
-  // 员工看到莫名闪窗易误判为病毒。VBS 的 Run(..., 0) 表示不显示窗口。
-  const vbs = path.join(BASE_DIR, "run-reconcile.vbs");
-  fs.writeFileSync(
-    vbs,
-    `CreateObject("WScript.Shell").Run """${node}"" ""${reconcile}"" --only codex", 0, False\r\n`
-  );
-  // 两条任务：登录时（开机主触发）+ 每天正午（长期不注销的挂机兜底）。
-  const tr = `wscript.exe "${vbs}"`;
-  register("schtasks", ["/Create", "/TN", "VantageCodexLogon", "/SC", "ONLOGON", "/TR", tr, "/F"]);
-  register("schtasks", [
-    "/Create", "/TN", "VantageCodexDaily", "/SC", "DAILY", "/ST", "12:00", "/TR", tr, "/F",
-  ]);
-  // 清理旧版遗留的每小时任务（不存在则忽略）
-  try {
-    register("schtasks", ["/Delete", "/TN", "VantageCodexReconcile", "/F"]);
-  } catch {
-    /* 旧任务不存在 */
-  }
-  console.log("✓ 已安装 Codex 扫描触发器（计划任务，登录时 + 每天正午，隐藏窗口，升级安全）");
+function installSchtasks() {
+  // Windows 触发器逻辑收在 agent/trigger.cjs——与 reconcile 自检自愈共用同一来源:
+  // 登录自启走"启动"文件夹(用户级,零权限;旧 ONLOGON 计划任务要管理员,已弃),
+  // 每日兜底走 schtasks DAILY(普通账号可建)。失败不再中断 setup,各步独立报错。
+  require("./agent/trigger.cjs").ensureWindowsCodexTrigger({ log: console.log });
+  console.log("✓ Codex 扫描触发器:登录自启(启动文件夹)+ 每天正午(计划任务),无需管理员,隐藏窗口");
 }
 
 console.log("== Vantage setup ==");
