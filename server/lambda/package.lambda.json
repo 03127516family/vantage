@@ -1,0 +1,9 @@
+{
+  "name": "vantage-lambda",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1090.0"
+  }
+}

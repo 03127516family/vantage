@@ -95,7 +95,7 @@ export function keyOf(r: UsageRecord): string {
  * 同一 session 的上报只来自一台机器,该比较是同钟比较,不受跨机器时钟误差影响。
  * 全部缺失时按 0 处理(永不覆盖已有正常记录)。
  */
-export function effectiveTs(r: UsageRecord): number {
+export function effectiveTs(r: UsageRecord & { received_at?: string }): number {
   const s = r.observed_at ?? r.collected_at ?? r.ended_at ?? r.received_at;
   const t = s ? Date.parse(s) : NaN;
   return Number.isNaN(t) ? 0 : t;

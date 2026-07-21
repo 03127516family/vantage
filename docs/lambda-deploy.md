@@ -43,15 +43,18 @@ IAM → 角色 → 创建:信任实体 `lambda.amazonaws.com`。内联策略(与
 ```bash
 cd server
 npm install
-npm run build:lambda        # -> dist/lambda/index.mjs
-cd dist/lambda && zip vantage-lambda.zip index.mjs
+npm run build:lambda        # 逐文件编译 TS→JS(保留目录结构与注释,产物人工可审;
+                            # 非 bundle)+ 安装生产依赖(node_modules 一并打入,自包含)
+# 产物:dist/vantage-lambda.zip(约 3MB,含 lambda/ src/ node_modules/ package.json)
 ```
+
+产物逐文件可读、与 TS 源码一一对应,上传前可直接解压审阅。远小于控制台 50MB 直传上限。
 
 ## 3. 建函数
 
-Lambda 控制台(cn-north-1)→ 创建函数:从头创作,名称 `vantage-backend`,运行时 **Node.js 22.x**(若控制台可选 24.x 更佳;**不要选 20.x**——社区 2026-04 EOL,Lambda 已停止新建;bundle 按 node20 目标打包,22/24 直接兼容无需重打),架构 x86_64。创建后:
+Lambda 控制台(cn-north-1)→ 创建函数:从头创作,名称 `vantage-backend`,运行时 **Node.js 22.x**(若控制台可选 24.x 更佳;**不要选 20.x**——社区 2026-04 EOL,Lambda 已停止新建;产物为 ES2022 JS,22/24 直接运行),架构 x86_64。创建后:
 
-- 代码:上传 `vantage-lambda.zip`;处理程序填 `index.handler`
+- 代码:上传 `server/dist/vantage-lambda.zip`;处理程序填 `lambda/handler.handler`
 - 配置 → 常规:内存 1024 MB,超时 15 分钟(900s,全量重放兜底)
 - 配置 → 环境变量:
 

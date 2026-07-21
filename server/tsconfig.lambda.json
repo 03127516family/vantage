@@ -1,0 +1,18 @@
+{
+  // Lambda 打包专用:把 handler 的 import 图逐文件编译成可读 JS(不打 bundle、保留目录结构)。
+  // rewriteRelativeImportExtensions(TS 5.7+):源码里的 "./s3.ts" 引用在产物里自动改写成 "./s3.js",
+  // 源码不用为打包做任何改动,继续用 tsx 跑。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": false,
+    "allowImportingTsExtensions": false,
+    "rewriteRelativeImportExtensions": true,
+    "rootDir": ".",
+    "outDir": "dist/lambda",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["lambda/handler.ts"]
+}
