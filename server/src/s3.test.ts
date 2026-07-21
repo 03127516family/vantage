@@ -29,6 +29,21 @@ test("s3ConfigFromEnv: region 默认 us-east-1,可覆盖(aws-cn 填 cn-north-1 �
   assert.equal(cn.region, "cn-north-1");
 });
 
+test("s3ConfigFromEnv: 拾取 AWS_SESSION_TOKEN(Lambda 执行角色临时凭证必需)", () => {
+  const c = s3ConfigFromEnv({
+    VANTAGE_S3_BUCKET: "b",
+    AWS_ACCESS_KEY_ID: "ASIAEXAMPLE",
+    AWS_SECRET_ACCESS_KEY: "SK",
+    AWS_SESSION_TOKEN: "TOKEN",
+  });
+  assert.equal(c.sessionToken, "TOKEN");
+  // 静态密钥(本机冒烟/Node 壳)无 token -> 空串,credentials 不传该字段
+  assert.equal(
+    s3ConfigFromEnv({ VANTAGE_S3_BUCKET: "b", AWS_ACCESS_KEY_ID: "AK", AWS_SECRET_ACCESS_KEY: "SK" }).sessionToken,
+    ""
+  );
+});
+
 test("s3ConfigFromEnv: VANTAGE_S3_ENDPOINT 仅测试用(如 fake-s3)", () => {
   const c = s3ConfigFromEnv({
     VANTAGE_S3_BUCKET: "b",

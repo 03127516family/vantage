@@ -15,6 +15,7 @@ export interface S3Config {
   endpoint: string; // 空串 = SDK 按 region 自动解析(推荐;aws-cn 只改 region 即可)
   accessKeyId: string;
   secretAccessKey: string;
+  sessionToken: string; // 临时凭证的会话令牌;Lambda 运行时自动注入 AWS_SESSION_TOKEN,不传则临时凭证签名必 403
   prefix: string; // 桶内前缀(如 "vantage-prod/"),空串 = 桶根;事件写到 <prefix>events/ 下
 }
 
@@ -36,6 +37,7 @@ export function s3ConfigFromEnv(env: NodeJS.ProcessEnv = process.env): S3Config 
     endpoint: env.VANTAGE_S3_ENDPOINT ?? "",
     accessKeyId,
     secretAccessKey,
+    sessionToken: env.AWS_SESSION_TOKEN ?? "",
     prefix: normalizePrefix(env.VANTAGE_S3_PREFIX ?? ""),
   };
 }
@@ -47,7 +49,12 @@ function clientFor(cfg: S3Config): S3Client {
   if (cached?.key === key) return cached.client;
   const client = new S3Client({
     region: cfg.region,
-    credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
+    credentials: {
+      accessKeyId: cfg.accessKeyId,
+      secretAccessKey: cfg.secretAccessKey,
+      // Lambda 注入的是执行角色临时凭证(ASIA*),缺 sessionToken 签名必 403;静态密钥无 token,不传该字段
+      ...(cfg.sessionToken ? { sessionToken: cfg.sessionToken } : {}),
+    },
     // 自定义 endpoint(测试 fake-s3)走 path-style -> http://host:port/<bucket>/<key>;
     // 默认(真 AWS)由 SDK 解析虚拟托管式,aws-cn 设 region 即自动用 .amazonaws.com.cn。
     ...(cfg.endpoint ? { endpoint: cfg.endpoint, forcePathStyle: true } : {}),
