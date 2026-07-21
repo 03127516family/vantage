@@ -1,10 +1,10 @@
 {
   "name": "vantage",
   "displayName": "Vantage",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "dgcrane 研发效能内部工具",
   "author": {
-    "name": "dgcrane"
+    "name": "vantage"
   },
-  "keywords": ["dgcrane", "devtools"]
+  "keywords": ["vantage", "devtools"]
 }

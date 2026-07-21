@@ -1,6 +1,6 @@
 {
   "_comment": "dgcrane 管理员：发布前把 server_url/token 改成真实值。departments 仅作兜底菜单（新员工不在 roster.json 时手选）；正常路径部门由 setup.cjs 按 roster.json 自动填。",
-  "server_url": "https://sczt79v8e3.execute-api.cn-north-1.amazonaws.com.cn/default",
+  "server_url": "https://sczt79v8e3.execute-api.cn-north-1.amazonaws.com.cn",
   "token": "7fa09060116b1dbf52ac9ed0b687022cc463b6c3ab86eeec82c652b49f13eeb7",
   "departments": ["外贸部", "市场部", "财务部", "技术部", "行政部", "其他"]
 }

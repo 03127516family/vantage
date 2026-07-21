@@ -138,7 +138,9 @@ function postJson(cfg, body, timeoutMs = 8000) {
   return new Promise((resolve) => {
     let u;
     try {
-      u = new URL("/ingest", cfg.server_url);
+      // 不能用 new URL("/ingest", base):绝对路径会吃掉 base 自带的路径段
+      // (如 API Gateway 阶段名 /default),改为字符串拼接保留完整路径。
+      u = new URL(`${String(cfg.server_url).replace(/\/+$/, "")}/ingest`);
     } catch {
       return resolve(0);
     }
