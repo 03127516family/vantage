@@ -49,7 +49,7 @@ cd dist/lambda && zip vantage-lambda.zip index.mjs
 
 ## 3. 建函数
 
-Lambda 控制台(cn-north-1)→ 创建函数:从头创作,名称 `vantage-backend`,运行时 **Node.js 20.x**,架构 x86_64。创建后:
+Lambda 控制台(cn-north-1)→ 创建函数:从头创作,名称 `vantage-backend`,运行时 **Node.js 22.x**(若控制台可选 24.x 更佳;**不要选 20.x**——社区 2026-04 EOL,Lambda 已停止新建;bundle 按 node20 目标打包,22/24 直接兼容无需重打),架构 x86_64。创建后:
 
 - 代码:上传 `vantage-lambda.zip`;处理程序填 `index.handler`
 - 配置 → 常规:内存 1024 MB,超时 15 分钟(900s,全量重放兜底)
