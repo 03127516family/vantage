@@ -105,3 +105,17 @@ test("兼容 API Gateway payload 1.0(REST API / HTTP API 1.0):httpMethod + path 
   const noauth = await h({ httpMethod: "GET", path: "/stats", headers: {} });
   assert.equal(noauth.statusCode, 401);
 });
+
+test("兼容命名阶段的 HTTP API:rawPath 带 /<stage>/ 前缀时剥离(Lambda 触发器默认建 default 阶段)", async () => {
+  const h = createHandler(fakeDeps(), TOKEN);
+  const ctx = { http: { method: "GET" }, stage: "default" };
+  const r1 = await h({ requestContext: ctx, rawPath: "/default/health" });
+  assert.equal(r1.statusCode, 200);
+  const r2 = await h({ requestContext: ctx, rawPath: "/default/stats", headers: AUTH });
+  assert.equal(r2.statusCode, 200);
+  const r3 = await h({ requestContext: ctx, rawPath: "/default/stats", headers: {} });
+  assert.equal(r3.statusCode, 401);
+  // $default 阶段无前缀,不受影响
+  const r4 = await h({ requestContext: { http: { method: "GET" }, stage: "$default" }, rawPath: "/health" });
+  assert.equal(r4.statusCode, 200);
+});

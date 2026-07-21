@@ -51,7 +51,12 @@ export function createHandler(deps: RebuildDeps, token: string) {
       // 事件形状双兼容:Function URL / HTTP API(payload 2.0)用 requestContext.http + rawPath;
       // REST API / HTTP API(payload 1.0)用 httpMethod + path。headers/body/isBase64Encoded 两者一致。
       const method: string = event?.requestContext?.http?.method ?? event?.httpMethod ?? "";
-      const path: string = event?.rawPath ?? event?.path ?? "";
+      let path: string = event?.rawPath ?? event?.path ?? "";
+      // 命名阶段(非 $default)的 HTTP API:rawPath 带 "/<stage>" 前缀,剥离后再匹配路由
+      const stage: string = event?.requestContext?.stage ?? "";
+      if (stage && stage !== "$default" && path.startsWith(`/${stage}/`)) {
+        path = path.slice(stage.length + 1);
+      }
       if (method === "GET" && path === "/health") return jsonResponse(200, { ok: true });
 
       if (method === "POST" && path === "/ingest") {
