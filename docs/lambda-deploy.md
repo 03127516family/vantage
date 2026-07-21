@@ -1,6 +1,6 @@
 # Vantage Lambda 部署指南(cn-north-1)
 
-生产架构:员工采集器 → Lambda Function URL → S3(events/ 账本 + state/ 视图)。设计见 `docs/superpowers/specs/2026-07-20-lambda-migration-design.md`。桶:`lrm-s3-store`,前缀 `vantage-prod/`。
+生产架构:员工采集器 → API Gateway(HTTP API)→ Lambda → S3(events/ 账本 + state/ 视图)。设计见 `docs/superpowers/specs/2026-07-20-lambda-migration-design.md`。桶:`lrm-s3-store`,前缀 `vantage-prod/`。
 
 ## 0. 前置:桶冒烟(必过)
 
@@ -68,9 +68,17 @@ Lambda 控制台(cn-north-1)→ 创建函数:从头创作,名称 `vantage-backen
 
 - 配置 → 权限:执行角色选 `vantage-lambda-role`
 
-## 4. 开 Function URL
+## 4. 开 HTTP 入口(API Gateway;中国区没有 Function URL)
 
-函数 → 配置 → 函数 URL → 创建,授权类型 **NONE**(应用层 Bearer 校验,与现状一致)。得到 `https://<id>.lambda-url.cn-north-1.on.cn/`。
+Lambda Function URL 未在中国区上线,用 **API Gateway HTTP API** 替代:按请求计费、无固定成本(我们的量级每月几毛钱);其 payload 2.0 事件与 Function URL 同构,handler 已双兼容 1.0/2.0,无需改动。
+
+1. API Gateway 控制台(cn-north-1)→ **创建 API → HTTP API → 构建**
+2. 集成:选 **Lambda** → `vantage-backend`;API 名称 `vantage-api`
+3. 路由:保持默认 `$default`;接受控制台"自动为 Lambda 添加调用权限"
+4. 阶段:保持 **`$default`(自动部署)**——**不要用命名阶段**,否则 URL 多出 `/prod` 前缀,handler 按精确路径匹配会 404
+5. 创建后复制"调用 URL":`https://<api-id>.execute-api.cn-north-1.amazonaws.com.cn`
+
+(若中国区控制台只提供 REST API:同样可以,handler 已兼容 payload 1.0;建 `/{proxy+}` 贪婪资源 + Lambda 代理集成即可,阶段名会进 path,用 `/prod/ingest` 形式访问时需在 handler 路径判断前剥离阶段前缀——此时回来找我加一行。)
 
 验证:
 
@@ -88,7 +96,7 @@ curl -s https://<URL>/stats -H "Authorization: Bearer <密钥>"   # users 里出
 
 ## 6. 员工切换
 
-采集端 `server_url` 换成函数 URL,token 不变,重跑 setup 即切换。无历史数据需迁移(切换前未上线)。
+采集端 `server_url` 换成 API 调用 URL,token 不变,重跑 setup 即切换。无历史数据需迁移(切换前未上线)。
 
 ## 排障
 
