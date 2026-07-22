@@ -21,8 +21,9 @@ const THROTTLE_MS = Number(process.env.VANTAGE_RECONCILE_INTERVAL_MIN || 30) * 6
 // 死信/损坏文件保留天数
 const RETENTION_DAYS = Number(process.env.VANTAGE_RETENTION_DAYS || 14);
 // 插件自更新节流：SessionStart 时后台跑官方 CLI 检查更新（marketplace update + plugin update），
-// 默认 24h 一次。版本串未 bump 则官方判定"已是最新"、空跑一次无妨；有新版则落盘、下次会话生效。
-const SELF_UPDATE_INTERVAL_MS = Number(process.env.VANTAGE_SELF_UPDATE_INTERVAL_H || 24) * 3600 * 1000;
+// 默认 2h 一次（每次检查只是后台一次 git fetch,成本可忽略;收紧是为让修复当天下达员工)。
+// 版本串未 bump 则官方判定"已是最新"、空跑一次无妨;有新版则落盘、下次会话生效。
+const SELF_UPDATE_INTERVAL_MS = Number(process.env.VANTAGE_SELF_UPDATE_INTERVAL_H || 2) * 3600 * 1000;
 // marketplace 名 / 插件 ID（与 .claude-plugin/marketplace.json 一致）
 const MARKETPLACE = process.env.VANTAGE_MARKETPLACE || "dgcrane";
 const PLUGIN_ID = `vantage@${MARKETPLACE}`;
