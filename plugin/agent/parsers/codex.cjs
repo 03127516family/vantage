@@ -127,6 +127,9 @@ function parseCodexRollout(rolloutPath) {
       ? Number(node.used_percent)
       : null;
 
+  // 空会话/启动碎片(无 AI 回复且无 token 消耗)不上传——Codex 反复启动会留下只有开头模板的碎片文件,避免灌库
+  if (assistantMessages === 0 && totalTokens === 0) return null;
+
   return {
     tool: "codex",
     session_id: sessionId,

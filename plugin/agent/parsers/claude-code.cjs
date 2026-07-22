@@ -150,6 +150,9 @@ function parseClaudeTranscript(transcriptPath) {
     if (!Number.isNaN(d) && d >= 0) durationMs = d;
   }
 
+  // 空会话/启动碎片(无 AI 回复且无 token 消耗)不上传——避免空会话/启动碎片灌库
+  if (assistantMessages === 0 && inputTokens + outputTokens === 0) return null;
+
   return {
     tool: "claude-code",
     session_id: sessionId,
