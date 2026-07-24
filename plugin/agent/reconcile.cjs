@@ -222,7 +222,7 @@ async function main() {
   // 只在全量扫描时做：--only 单源扫描（如 launchd RunAtLoad 的 --only codex）若消耗了
   // 这个标记，另一数据源里卡空身份的会话就永远等不到重传。
   const restamp = new Set();
-  if (!only) {
+  if (!args.only) {
     const idKey = JSON.stringify([cfg.name || "", cfg.email || "", cfg.department || ""]);
     const state = core.readState();
     const prev = state.__identity__ ?? "";
