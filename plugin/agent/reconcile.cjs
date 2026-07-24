@@ -186,7 +186,7 @@ async function main() {
   // Windows:Codex 触发器自检自愈——自更新只同步脚本文件,触发器(装没装/机制换没换)
   // 由这里顺带保证,员工永远不需要为触发器重跑 setup。非 win32 内部直接返回。
   try {
-    require("./trigger.cjs").ensureWindowsCodexTrigger({ log: core.log });
+    require("./trigger.cjs").ensureCodexTriggers({ log: core.log });
   } catch (e) {
     core.log(`codex 触发器自检异常(已忽略):${e.message}`);
   }
