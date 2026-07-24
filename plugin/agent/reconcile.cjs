@@ -18,6 +18,10 @@ const RECENT_DAYS = Number(process.env.VANTAGE_RECENT_DAYS || 7);
 // 距上次成功的全量扫描不足 N 分钟就跳过本轮（只影响钩子路径；手动 sync、--only 定时任务、
 // setup 后的首次对账都不带 SessionStart 事件，不受节流）。
 const THROTTLE_MS = Number(process.env.VANTAGE_RECONCILE_INTERVAL_MIN || 30) * 60 * 1000;
+// Codex 定时触发节流：默认 30 分钟
+const CODEX_SCHEDULED_THROTTLE_MS = Number(process.env.VANTAGE_CODEX_SCHEDULED_INTERVAL_MIN || 30) * 60 * 1000;
+// Codex 事件触发节流：默认 5 分钟（仅 macOS WatchPaths 使用）
+const CODEX_EVENT_THROTTLE_MS = Number(process.env.VANTAGE_CODEX_EVENT_INTERVAL_MIN || 5) * 60 * 1000;
 // 死信/损坏文件保留天数
 const RETENTION_DAYS = Number(process.env.VANTAGE_RETENTION_DAYS || 14);
 // 插件自更新节流：SessionStart 时后台跑官方 CLI 检查更新（marketplace update + plugin update），
@@ -147,18 +151,21 @@ function cleanupOld() {
   }
 }
 
-// 解析 --only <tool>：限定只扫某个数据源（Codex 定时任务用 --only codex）
-function parseOnly(argv) {
-  const i = argv.indexOf("--only");
-  return i >= 0 ? argv[i + 1] : null;
+function parseArgs(argv) {
+  const out = { only: null, trigger: "scheduled" };
+  const onlyIdx = argv.indexOf("--only");
+  if (onlyIdx >= 0 && argv[onlyIdx + 1]) out.only = argv[onlyIdx + 1];
+  const triggerIdx = argv.indexOf("--trigger");
+  if (triggerIdx >= 0 && argv[triggerIdx + 1]) out.trigger = argv[triggerIdx + 1];
+  return out;
 }
 
 async function main() {
   core.ensureDirs();
   const cfg = core.loadConfig();
 
-  const only = parseOnly(process.argv);
-  const sources = only ? SOURCES.filter((s) => s.tool === only) : SOURCES;
+  const args = parseArgs(process.argv);
+  const sources = args.only ? SOURCES.filter((s) => s.tool === args.only) : SOURCES;
 
   // 当前刚开的会话：从 SessionStart 的 stdin 拿 session_id，扫描时跳过它
   let currentSessionId = "";
@@ -192,6 +199,18 @@ async function main() {
       core.log(
         `reconcile: throttled (last full scan ${Math.round((Date.now() - last) / 60000)}min ago)`
       );
+      core.spawnDetached("flush.cjs");
+      return;
+    }
+  }
+
+  // Codex-only 路径的独立节流
+  if (args.only === "codex") {
+    const state = core.readState();
+    const throttleMs = args.trigger === "event" ? CODEX_EVENT_THROTTLE_MS : CODEX_SCHEDULED_THROTTLE_MS;
+    const last = Number(state[`__last_codex_${args.trigger}__`] || 0);
+    if (Date.now() - last < throttleMs) {
+      core.log(`reconcile: codex throttled (trigger=${args.trigger}, last ${Math.round((Date.now() - last) / 60000)}min ago)`);
       core.spawnDetached("flush.cjs");
       return;
     }
@@ -272,8 +291,16 @@ async function main() {
   core.log(
     `reconcile: found ${totalFiles} files, spooled ${swept} unsynced (skip=${currentSessionId || "none"})`
   );
-  // 只有全量扫描才更新节流时间戳：--only 单源扫没覆盖另一数据源，不能挡住后续的全量扫。
-  if (!only) {
+
+  // 只有真正执行了扫描才更新对应触发源的时间戳（节流路径已 return）
+  if (args.only === "codex") {
+    const state = core.readState();
+    state[`__last_codex_${args.trigger}__`] = Date.now();
+    core.writeState(state);
+  }
+
+  // 全量扫描的 __last_reconcile__ 仅在非 --only 时更新（避免单源扫描污染全量扫描的节流）
+  if (!args.only) {
     const state = core.readState();
     state.__last_reconcile__ = Date.now();
     core.writeState(state);
