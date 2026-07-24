@@ -50,12 +50,16 @@ function writeIfChanged(filePath, body) {
 function installLaunchd(node, reconcile) {
   const labelBase = "com.dgcrane.vantage.codex";
   const dir = path.join(os.homedir(), "Library", "LaunchAgents");
+  const domain = `gui/${process.getuid()}`;
   fs.mkdirSync(dir, { recursive: true });
 
-  // 清理旧单 job plist
+  // 清理旧单 job plist 并 unload（如果旧任务正加载，只删文件不会停止）
   const oldPlist = path.join(dir, `${labelBase}.plist`);
   try {
     fs.unlinkSync(oldPlist);
+  } catch {}
+  try {
+    register("launchctl", ["bootout", `${domain}/${labelBase}`]);
   } catch {}
 
   const scheduledPlist = path.join(dir, `${labelBase}.scheduled.plist`);
@@ -72,6 +76,7 @@ function installLaunchd(node, reconcile) {
     <string>--only</string><string>codex</string>
     <string>--trigger</string><string>scheduled</string>
   </array>
+  <key>RunAtLoad</key><true/>
   <key>StartCalendarInterval</key>
   <dict><key>Minute</key><integer>0</integer></dict>
 </dict></plist>
@@ -97,7 +102,6 @@ function installLaunchd(node, reconcile) {
   writeIfChanged(scheduledPlist, scheduledBody);
   writeIfChanged(watchPlist, watchBody);
 
-  const domain = `gui/${process.getuid()}`;
   for (const label of [`${labelBase}.scheduled`, `${labelBase}.watch`]) {
     try {
       register("launchctl", ["bootout", `${domain}/${label}`]);
