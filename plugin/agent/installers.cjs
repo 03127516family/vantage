@@ -143,6 +143,7 @@ WantedBy=timers.target
 function installWindowsCodexTrigger({ log = () => {} } = {}) {
   if (process.platform !== "win32" || process.env.VANTAGE_SKIP_TRIGGER === "1") return;
   const baseDir = path.join(os.homedir(), ".vantage");
+  fs.mkdirSync(baseDir, { recursive: true });
   const body = vbsBody(process.execPath, path.join(baseDir, "agent", "reconcile.cjs"));
 
   const runVbs = path.join(baseDir, "run-reconcile.vbs");
@@ -164,9 +165,19 @@ function installWindowsCodexTrigger({ log = () => {} } = {}) {
   }
 
   const TASK_NAME = "VantageCodexHourly";
+  let needsCreate = false;
   try {
-    schtasks(["/Query", "/TN", TASK_NAME]);
+    const info = schtasks(["/Query", "/TN", TASK_NAME, "/XML"]);
+    // 如果任务已存在但内容不是 hourly + StartWhenAvailable，删除重建
+    if (!info.includes("<ScheduleByHour>") || !info.includes("<StartWhenAvailable>true</StartWhenAvailable>")) {
+      schtasks(["/Delete", "/TN", TASK_NAME, "/F"]);
+      needsCreate = true;
+    }
   } catch {
+    needsCreate = true;
+  }
+
+  if (needsCreate) {
     const xmlPath = path.join(baseDir, "vantage-codex-hourly.xml");
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">

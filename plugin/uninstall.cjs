@@ -26,15 +26,23 @@ function run(cmd, argv, dryLabel) {
 
 // --- 三平台触发器卸载(对应 setup/trigger 装的) ---
 function uninstallMacTrigger() {
-  const label = "com.dgcrane.vantage.codex";
-  const plist = path.join(os.homedir(), "Library", "LaunchAgents", `${label}.plist`);
-  run("launchctl", ["bootout", `gui/${process.getuid()}/${label}`], `launchctl bootout gui/${process.getuid()}/${label}`);
-  rm(plist);
+  const labelBase = "com.dgcrane.vantage.codex";
+  const dir = path.join(os.homedir(), "Library", "LaunchAgents");
+  const domain = `gui/${process.getuid()}`;
+  // 新形态：两个 job
+  for (const suffix of ["scheduled", "watch"]) {
+    const label = `${labelBase}.${suffix}`;
+    run("launchctl", ["bootout", `${domain}/${label}`], `launchctl bootout ${domain}/${label}`);
+    rm(path.join(dir, `${label}.plist`));
+  }
+  // 旧单 job 清理（兼容老版本）
+  run("launchctl", ["bootout", `${domain}/${labelBase}`], `launchctl bootout ${domain}/${labelBase}`);
+  rm(path.join(dir, `${labelBase}.plist`));
 }
 
 function uninstallLinuxTrigger() {
   const dir = path.join(os.homedir(), ".config", "systemd", "user");
-  run("systemctl", ["--user", "disable", "--now", "vantage-codex.service"], "systemctl --user disable --now vantage-codex.service");
+  run("systemctl", ["--user", "disable", "--now", "vantage-codex.timer"], "systemctl --user disable --now vantage-codex.timer");
   rm(path.join(dir, "vantage-codex.service"));
   rm(path.join(dir, "vantage-codex.timer"));
   run("systemctl", ["--user", "daemon-reload"], "systemctl --user daemon-reload");
@@ -44,10 +52,11 @@ function uninstallWindowsTrigger() {
   const roaming = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
   const startup = path.join(roaming, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
   rm(path.join(startup, "vantage-codex.vbs"));
-  rm(path.join(core.BASE_DIR, "run-reconcile.vbs")); // 每日兜底执行体
-  run("schtasks", ["/Delete", "/TN", "VantageCodexDaily", "/F"], "schtasks /Delete /TN VantageCodexDaily /F");
-  // 清理旧版残留任务(已弃的 ONLOGON + 旧每小时任务),与 trigger.cjs ensure 对称;不存在则幂等忽略
-  for (const tn of ["VantageCodexLogon", "VantageCodexReconcile"]) {
+  rm(path.join(core.BASE_DIR, "run-reconcile.vbs")); // 每小时兜底执行体
+  // 新形态：每小时任务
+  run("schtasks", ["/Delete", "/TN", "VantageCodexHourly", "/F"], "schtasks /Delete /TN VantageCodexHourly /F");
+  // 清理旧形态（daily / ONLOGON / 旧每小时任务），与 trigger.cjs ensure 对称；不存在则幂等忽略
+  for (const tn of ["VantageCodexDaily", "VantageCodexLogon", "VantageCodexReconcile"]) {
     run("schtasks", ["/Delete", "/TN", tn, "/F"], `schtasks /Delete /TN ${tn} /F`);
   }
 }
