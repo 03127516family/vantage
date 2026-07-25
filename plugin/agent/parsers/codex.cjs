@@ -8,6 +8,16 @@ const fs = require("node:fs");
 const { redact, truncate } = require("../core.cjs");
 const { classifyIntent, boundFiles, redactedTruncated } = require("./helpers.cjs");
 
+// 判断一条 user_message 是否为 Codex 注入的应用状态（而非真人提问）。
+// 特征：以 markdown 标题(#)开头，或含浏览器/活动/用户状态等上下文块标记。
+function isStateInjection(msg) {
+  if (typeof msg !== "string") return false;
+  const t = msg.trim();
+  if (!t) return false;
+  if (t.startsWith("#")) return true;
+  return /Current URL:|In app browser|Recent activity|- The user (has|is|wants)/.test(t);
+}
+
 function parseCodexRollout(rolloutPath) {
   let content;
   try {
@@ -88,8 +98,12 @@ function parseCodexRollout(rolloutPath) {
       if (pt === "user_message") {
         userMessages += 1;
         if (typeof p.message === "string") {
-          if (!firstPrompt) firstPrompt = p.message;
-          lastUserMsg = p.message; // 循环结束即=最后一次真人提问
+          // Codex 会把应用状态(浏览器状态/最近活动等)当作 user_message 注入，
+          // 这些不是真人提问，会污染 first/last_prompt。按特征跳过，只留"像人话"的。
+          if (!isStateInjection(p.message)) {
+            if (!firstPrompt) firstPrompt = p.message;
+            lastUserMsg = p.message; // 循环结束即=最后一次真人提问
+          }
         }
       } else if (pt === "agent_message") {
         assistantMessages += 1;
