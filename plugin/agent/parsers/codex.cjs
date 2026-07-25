@@ -6,6 +6,7 @@
 //   type=response_item  payload.type ∈ {function_call, custom_tool_call, message, ...}
 const fs = require("node:fs");
 const { redact, truncate } = require("../core.cjs");
+const { classifyIntent, boundFiles, redactedTruncated } = require("./helpers.cjs");
 
 function parseCodexRollout(rolloutPath) {
   let content;
@@ -31,6 +32,11 @@ function parseCodexRollout(rolloutPath) {
   let model = "";
   let firstTs = "";
   let lastTs = "";
+  // 内容增强采集（见 helpers.cjs）：末句提问、工具直方图、改动文件、失败计数。
+  let lastUserMsg = "";
+  const toolsUsed = {}; // { 工具名: 次数 }
+  const changedFiles = []; // patch_apply_end 里成功应用的文件路径
+  let toolErrorCount = 0; // 命令非 0 退出 / patch 应用失败
   // 分模型明细：会话内可能 /model 切换。按“当前 turn_context 的模型”把每轮增量分开累计。
   const byModel = {};
   const accModel = (m, last) => {
@@ -81,9 +87,20 @@ function parseCodexRollout(rolloutPath) {
     if (o.type === "event_msg") {
       if (pt === "user_message") {
         userMessages += 1;
-        if (!firstPrompt && typeof p.message === "string") firstPrompt = p.message;
+        if (typeof p.message === "string") {
+          if (!firstPrompt) firstPrompt = p.message;
+          lastUserMsg = p.message; // 循环结束即=最后一次真人提问
+        }
       } else if (pt === "agent_message") {
         assistantMessages += 1;
+      } else if (pt === "patch_apply_end") {
+        // 结构化文件改动事件：success + changes[绝对路径]={type,content}。
+        // 只取路径（basename 在 helpers 里处理）+ success；绝不取 content。
+        if (p.success === false) {
+          toolErrorCount += 1;
+        } else if (p.changes && typeof p.changes === "object") {
+          for (const fpath of Object.keys(p.changes)) changedFiles.push(fpath);
+        }
       } else if (pt === "token_count") {
         // 累计用量：取最后一个 token_count 的 total_token_usage
         const u = p.info && p.info.total_token_usage;
@@ -104,7 +121,16 @@ function parseCodexRollout(rolloutPath) {
     }
 
     if (o.type === "response_item") {
-      if (pt === "function_call" || pt === "custom_tool_call") toolCalls += 1;
+      if (pt === "function_call" || pt === "custom_tool_call") {
+        toolCalls += 1;
+        const name = p.name || "unknown";
+        toolsUsed[name] = (toolsUsed[name] || 0) + 1;
+      } else if (pt === "function_call_output" || pt === "custom_tool_call_output") {
+        // exit code 内嵌在 output 文本里；非 0 视为失败。
+        const out = typeof p.output === "string" ? p.output : "";
+        const m = out.match(/(?:Process exited with code|Exit code):\s*(-?\d+)/);
+        if (m && Number(m[1]) !== 0) toolErrorCount += 1;
+      }
       continue;
     }
   }
@@ -172,6 +198,13 @@ function parseCodexRollout(rolloutPath) {
     quota_reached: rateLimits ? rateLimits.rate_limit_reached_type || null : null,
     first_prompt: truncate(redact(firstPrompt), 300),
     summary: truncate(redact(firstPrompt), 120), // Codex 无 AI 标题，用首句提问
+    // —— 内容增强（有界、隐私安全；详见 helpers.cjs）——
+    last_prompt: redactedTruncated(lastUserMsg, 120),
+    title: redactedTruncated(firstPrompt, 60), // Codex 无标题，取首句提问
+    intent: classifyIntent(firstPrompt, lastUserMsg, toolCalls),
+    tools_used: toolsUsed, // { 工具名: 次数 }，如 exec_command/apply_patch
+    files_touched: boundFiles(changedFiles), // { count, sample:[basename≤8] }
+    tool_failures: toolErrorCount,
   };
 }
 

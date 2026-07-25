@@ -55,6 +55,14 @@ export interface UsageRecord {
   first_prompt?: string;
   summary?: string;
   exit_reason?: string;
+  // 内容增强（采集端 parser 派生，有界、隐私安全）：末句提问、标题、意图、工具直方图、改动文件、失败计数。
+  // 老记录无这些字段；服务端合并/重建只做快照透传，不据此改聚合逻辑。
+  last_prompt?: string;
+  title?: string;
+  intent?: string; // debug | refactor | create | test | explore | chat
+  tools_used?: Record<string, number>; // { 工具名: 次数 }
+  files_touched?: { count: number; sample: string[] }; // basename 样本 + 去重总数
+  tool_failures?: number;
   // 由采集器生成,用于去重(一般 = tool + ':' + session_id)
   dedupe_key?: string;
   // 采集时刻(快照生成时间)。observed_at 为新字段名;collected_at 为旧采集端字段名,回退兼容。

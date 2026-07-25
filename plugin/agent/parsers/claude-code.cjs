@@ -3,6 +3,7 @@
 // 拿不到就留空。官方声明该格式为内部实现、可能变动，所以这里全部防御式取值。
 const fs = require("node:fs");
 const { redact, truncate } = require("../core.cjs");
+const { classifyIntent, boundFiles, redactedTruncated } = require("./helpers.cjs");
 
 // 从 message.content 里提取纯文本（content 可能是字符串或内容块数组）
 function extractText(message) {
@@ -29,11 +30,6 @@ function isHumanPrompt(o) {
     return c.some((b) => b && b.type === "text" && b.text && b.text.trim());
   }
   return false;
-}
-
-function countToolUses(message) {
-  if (!message || !Array.isArray(message.content)) return 0;
-  return message.content.filter((b) => b && b.type === "tool_use").length;
 }
 
 /**
@@ -70,6 +66,13 @@ function parseClaudeTranscript(transcriptPath) {
   let model = "";
   let firstTs = "";
   let lastTs = "";
+  // 内容增强采集（见 helpers.cjs）：工具直方图、改动文件、失败计数、标题、末句提问回退。
+  let customTitle = "";
+  let lastWalkPrompt = ""; // 逐行回退：若 last-prompt 事件缺失，用最后一次真人提问
+  const toolsUsed = {}; // { 工具名: 次数 }
+  const pendingEdits = {}; // tool_use_id -> file_path（Edit/Write/MultiEdit，待与 tool_result 配对确认成功）
+  const editWriteFiles = []; // 已确认成功的 Edit/Write/MultiEdit 文件路径
+  let toolErrorCount = 0;
   // 分模型明细：一个会话可能同时用多个模型（主模型 + 子任务/标题用的小模型），
   // 聚合成单一 model 会丢掉模型维度，这里按模型分开累计（请求数 + 各类 token）。
   const byModel = {};
@@ -113,16 +116,48 @@ function parseClaudeTranscript(transcriptPath) {
       lastTs = o.timestamp;
     }
     if (o.type === "ai-title" && o.aiTitle) aiTitle = String(o.aiTitle);
+    if (o.type === "custom-title" && o.customTitle) customTitle = String(o.customTitle);
     if (o.type === "last-prompt" && o.lastPrompt) lastPrompt = String(o.lastPrompt);
+
+    if (o.type === "user" && o.message && Array.isArray(o.message.content)) {
+      // tool_result 回填：统计失败；与 pending Edits 配对，确认成功的改动文件才计入 files_touched
+      for (const b of o.message.content) {
+        if (!b || b.type !== "tool_result") continue;
+        if (b.is_error) toolErrorCount += 1;
+        const id = b.tool_use_id;
+        if (id && pendingEdits[id] != null && !b.is_error) {
+          editWriteFiles.push(pendingEdits[id]);
+          delete pendingEdits[id];
+        }
+      }
+    }
 
     if (o.type === "user" && isHumanPrompt(o)) {
       userMessages += 1;
-      if (!firstPrompt) firstPrompt = extractText(o.message);
+      const t = extractText(o.message);
+      if (!firstPrompt) firstPrompt = t;
+      lastWalkPrompt = t; // 逐行回退用，循环结束即=最后一次真人提问
     }
 
     if (o.type === "assistant" && o.message) {
       assistantMessages += 1;
-      toolCalls += countToolUses(o.message);
+      // 统计工具直方图 + 登记待确认的改动文件（替代旧的 countToolUses 单计数）
+      if (Array.isArray(o.message.content)) {
+        for (const b of o.message.content) {
+          if (!b || b.type !== "tool_use") continue;
+          toolCalls += 1;
+          const name = b.name || "unknown";
+          toolsUsed[name] = (toolsUsed[name] || 0) + 1;
+          if (
+            (name === "Edit" || name === "Write" || name === "MultiEdit") &&
+            b.id &&
+            b.input &&
+            b.input.file_path
+          ) {
+            pendingEdits[b.id] = b.input.file_path;
+          }
+        }
+      }
       if (o.message.model) model = String(o.message.model); // 记录使用的模型（取最后一次）
       // 逐轮累加非缓存输入 + 输出 = 本次会话的 token 消耗量。
       // 与 Codex 的 total_token_usage（其内部也是逐轮累加）口径一致，便于横向比较。
@@ -180,6 +215,13 @@ function parseClaudeTranscript(transcriptPath) {
     quota_reached: null,
     first_prompt: truncate(redact(firstPrompt), 300),
     summary,
+    // —— 内容增强（有界、隐私安全；详见 helpers.cjs）——
+    last_prompt: redactedTruncated(lastPrompt || lastWalkPrompt, 120),
+    title: redactedTruncated(customTitle || aiTitle, 60),
+    intent: classifyIntent(firstPrompt, lastPrompt || lastWalkPrompt, toolCalls),
+    tools_used: toolsUsed, // { 工具名: 次数 }，工具集有限天然有界
+    files_touched: boundFiles(editWriteFiles), // { count, sample:[basename≤8] }
+    tool_failures: toolErrorCount,
   };
 }
 
