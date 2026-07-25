@@ -83,7 +83,10 @@ function parseCodexRollout(rolloutPath) {
     const pt = p.type;
 
     if (o.type === "session_meta") {
-      if (p.session_id && !sessionId) sessionId = p.session_id;
+      // session_meta 权威字段是 id；多数文件也带 session_id（同值），个别只有 id。
+      // 优先取内容字段，文件名 UUID 仅作兜底（见下方 match）。
+      const sid = p.session_id || p.id;
+      if (sid && !sessionId) sessionId = sid;
       if (p.cwd && !cwd) cwd = p.cwd;
       continue;
     }
