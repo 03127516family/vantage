@@ -127,9 +127,26 @@ function parseCodexRollout(rolloutPath) {
       ? Number(node.used_percent)
       : null;
 
+  // Codex 的 primary/secondary 槽位与窗口时长不固定:按 window_minutes 归类,
+  // 短窗(≤12h≈5小时)→primary,长窗(>12h≈7天)→secondary。实测 primary 装的是
+  // 7 天窗(window_minutes=10080),旧代码按槽位名取值导致 7 天数据被错标成 primary、secondary 显示 null
+  const classifyQuota = (rl) => {
+    let primary = null, secondary = null;
+    for (const node of [rl?.primary, rl?.secondary]) {
+      if (!node) continue;
+      const pct = usedPct(node);
+      if (pct === null) continue;
+      const mins = Number(node.window_minutes) || 0;
+      if (mins > 720) { if (secondary === null) secondary = pct; }
+      else { if (primary === null) primary = pct; }
+    }
+    return { primary, secondary };
+  };
+
   // 空会话/启动碎片(无 AI 回复且无 token 消耗)不上传——Codex 反复启动会留下只有开头模板的碎片文件,避免灌库
   if (assistantMessages === 0 && totalTokens === 0) return null;
 
+  const quota = classifyQuota(rateLimits);
   return {
     tool: "codex",
     session_id: sessionId,
@@ -149,8 +166,8 @@ function parseCodexRollout(rolloutPath) {
     reasoning_tokens: reasoningTokens,
     by_model: byModel, // 分模型明细：{ [model]: {requests,input,output,cache_read,cache_creation,reasoning} }
     // 当前用量（额度）——short=约5小时窗，long=每周窗；used_percent=已用百分比
-    quota_primary_pct: rateLimits ? usedPct(rateLimits.primary) : null,
-    quota_secondary_pct: rateLimits ? usedPct(rateLimits.secondary) : null,
+    quota_primary_pct: quota.primary,
+    quota_secondary_pct: quota.secondary,
     quota_plan: rateLimits ? rateLimits.plan_type || null : null,
     quota_reached: rateLimits ? rateLimits.rate_limit_reached_type || null : null,
     first_prompt: truncate(redact(firstPrompt), 300),
