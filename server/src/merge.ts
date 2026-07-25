@@ -13,6 +13,18 @@ export interface ModelUsage {
 }
 
 /**
+ * Codex 账户额度快照(来自 wham/usage,只取额度数值,无 PII)。
+ * 由 reconcile 每轮调 wham 后注入到当轮所有 Codex 记录;wham 失败则该记录无 quota。
+ */
+export interface QuotaSnapshot {
+  plan_type?: string | null; // 套餐,如 plus
+  used_percent?: number; // 7 天窗已用百分比(0-100)
+  limit_reached?: boolean; // 是否撞墙(额度耗尽)
+  reset_at?: string | null; // 重置时刻(ISO)
+  observed_at?: string; // 本次测量时刻(ISO);粘性沿用时随 quota 一起保留,看板据此判断新鲜度
+}
+
+/**
  * 一条使用记录(一次会话的当前完整快照)。
  * 采集器每次上传的是"这个会话到目前为止的全量",按 dedupe_key 合并,
  * 因此重复触发 / 重试 / 扫描兜底都不会造成重复统计。
@@ -46,11 +58,9 @@ export interface UsageRecord {
   // 分模型明细:一个会话可能用多个模型,这里按模型分开记(请求数 + 各类 token)。
   // 保留了模型维度,供服务端还原"按模型统计",不因聚合到会话而丢失。
   by_model?: Record<string, ModelUsage>;
-  // 当前用量(额度)——仅 Codex 会话带;used_percent 为"已用百分比"
-  quota_primary_pct?: number | null; // 短窗(Codex 约 5 小时)
-  quota_secondary_pct?: number | null; // 长窗(Codex 每周)
-  quota_plan?: string | null; // 套餐,如 plus
-  quota_reached?: string | null; // 撞到额度墙的类型,null=未撞
+  // 当前用量(额度)——仅 Codex 记录带;由采集端调 wham/usage 实时注入(quota.cjs)。
+  // 粘性合并:新记录无 quota 时沿用该 session 上次的 quota(见 mergeInto),避免 wham 失败时空值覆盖。
+  quota?: QuotaSnapshot;
   // 内容
   first_prompt?: string;
   summary?: string;
@@ -80,7 +90,7 @@ export interface StoredRecord extends UsageRecord {
 export interface WallHit {
   name: string;
   at: number; // effective_ts(ms)
-  type: string; // quota_reached 原值
+  type: string; // 撞墙类型，如 rate_limit_reached（quota.limit_reached 时留痕）
 }
 
 /** 合并状态:每会话最新快照 + 撞墙历史(去重)。纯内存结构,Node 壳与 Lambda 共用。 */
@@ -132,12 +142,18 @@ export function dayKeyLocal(ts: number): string {
 export function mergeInto(state: MergeState, rec: StoredRecord): void {
   const k = keyOf(rec);
   const prev = state.index.get(k);
+  // 粘性 quota:本条没拿到额度(wham 失败/非 Codex)但该 session 上次有 → 沿用,避免空值覆盖。
+  // 仅当本条确实胜出时才有意义(下面 set 后生效);observed_at 随 quota 一起沿用,诚实标测量时刻。
+  if (!rec.quota && prev?.quota) rec.quota = prev.quota;
   if (!prev || effectiveTs(rec) >= effectiveTs(prev)) state.index.set(k, rec);
-  if (rec.quota_reached) {
+  // 撞墙:额度耗尽(limit_reached)即留痕。at 用 quota.observed_at(测量时刻),
+  // 同一次 wham 观测的多条记录 observed_at 相同 → 自然去重为一条;不同观测时刻才算另一次。
+  if (rec.quota?.limit_reached) {
+    const qAt = rec.quota.observed_at ? Date.parse(rec.quota.observed_at) : effectiveTs(rec);
     const wh: WallHit = {
       name: rec.name || rec.email || rec.machine || "unknown",
-      at: effectiveTs(rec),
-      type: String(rec.quota_reached),
+      at: Number.isNaN(qAt) ? effectiveTs(rec) : qAt,
+      type: "rate_limit_reached",
     };
     const wk = `${wh.name} ${wh.at} ${wh.type}`;
     if (!state.wallHitKeys.has(wk)) {

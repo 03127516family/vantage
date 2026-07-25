@@ -38,7 +38,7 @@ function ev(rec: object): string {
 test("rebuild: 冷启动全量重放——三事件合并+撞墙,写回三文件(顺序 index→wallhits→view)", async () => {
   const s3 = fakeS3({
     "p/events/dt=2026-07-20/a.json": ev({ dedupe_key: "codex:x", tool: "codex", name: "甲", total_tokens: 100, observed_at: iso(NOW - 3 * 3600e3) }),
-    "p/events/dt=2026-07-20/b.json": ev({ dedupe_key: "codex:x", tool: "codex", name: "甲", total_tokens: 150, quota_reached: "primary", observed_at: iso(NOW - 2 * 3600e3) }),
+    "p/events/dt=2026-07-20/b.json": ev({ dedupe_key: "codex:x", tool: "codex", name: "甲", total_tokens: 150, quota: { limit_reached: true, observed_at: iso(NOW - 2 * 3600e3) }, observed_at: iso(NOW - 2 * 3600e3) }),
     "p/events/dt=2026-07-20/c.json": ev({ dedupe_key: "claude-code:y", tool: "claude-code", name: "乙", total_tokens: 200, observed_at: iso(NOW - 3600e3) }),
   });
   const r = await runRebuild(depsOf(s3));
@@ -91,7 +91,7 @@ test("rebuild: 增量——LIST 带水位线,只 GET 新 key", async () => {
 
 test("rebuild: 水位线回退重放幂等——撞墙不膨胀", async () => {
   const s3 = fakeS3({
-    "p/events/dt=2026-07-20/a.json": ev({ dedupe_key: "codex:x", tool: "codex", name: "甲", quota_reached: "primary", observed_at: iso(NOW - 3600e3) }),
+    "p/events/dt=2026-07-20/a.json": ev({ dedupe_key: "codex:x", tool: "codex", name: "甲", quota: { limit_reached: true, observed_at: iso(NOW - 3600e3) }, observed_at: iso(NOW - 3600e3) }),
   });
   const deps = depsOf(s3);
   await runRebuild(deps);

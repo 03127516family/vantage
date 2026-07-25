@@ -208,11 +208,7 @@ function parseClaudeTranscript(transcriptPath) {
     cache_creation_1h_tokens: cache1hTokens, // 2 倍档
     reasoning_tokens: 0, // Claude 的 usage 不单列推理 token
     by_model: byModel, // 分模型明细：{ [model]: {requests,input,output,cache_read,cache_creation,reasoning} }
-    // Claude Code 的会话文件不含额度信息，当前用量类字段留空
-    quota_primary_pct: null,
-    quota_secondary_pct: null,
-    quota_plan: null,
-    quota_reached: null,
+    // Claude Code 不涉 OpenAI 账户额度（wham），无 quota 字段。
     first_prompt: truncate(redact(firstPrompt), 300),
     summary,
     // —— 内容增强（有界、隐私安全；详见 helpers.cjs）——

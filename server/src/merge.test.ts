@@ -23,13 +23,23 @@ test("mergeInto: 同 key 取 effective_ts 大者,与顺序无关", () => {
 
 test("mergeInto: 撞墙按 (name,at,type) 去重——同一事件重复处理不膨胀", () => {
   const st = createMergeState();
-  const hit = rec({ quota_reached: "primary", observed_at: "2026-07-20T10:00:00.000Z" });
+  const hit = rec({ quota: { limit_reached: true, observed_at: "2026-07-20T10:00:00.000Z" }, observed_at: "2026-07-20T10:00:00.000Z" });
   mergeInto(st, hit);
   mergeInto(st, hit); // Lambda 水位线回退/并发重建会重复处理同一事件
   assert.equal(st.wallHits.length, 1);
-  mergeInto(st, rec({ quota_reached: "primary", observed_at: "2026-07-20T11:00:00.000Z" })); // 不同时刻另算
+  mergeInto(st, rec({ quota: { limit_reached: true, observed_at: "2026-07-20T11:00:00.000Z" }, observed_at: "2026-07-20T11:00:00.000Z" })); // 不同时刻另算
   assert.equal(st.wallHits.length, 2);
-  assert.deepEqual(st.wallHits[0], { name: "甲", at: Date.parse("2026-07-20T10:00:00.000Z"), type: "primary" });
+  assert.deepEqual(st.wallHits[0], { name: "甲", at: Date.parse("2026-07-20T10:00:00.000Z"), type: "rate_limit_reached" });
+});
+
+test("mergeInto: quota 粘性——新记录无 quota 时沿用上次(wham 失败不丢额度)", () => {
+  const st = createMergeState();
+  mergeInto(st, rec({ quota: { used_percent: 80, limit_reached: false, observed_at: "2026-07-20T10:00:00.000Z" }, observed_at: "2026-07-20T10:00:00.000Z" }));
+  // 下一轮 wham 失败：新记录不带 quota，但更新（effective_ts 更大）
+  mergeInto(st, rec({ total_tokens: 999, observed_at: "2026-07-20T11:00:00.000Z" }));
+  const got = st.index.get("codex:s1");
+  assert.equal(got?.total_tokens, 999); // 新值生效
+  assert.equal(got?.quota?.used_percent, 80); // quota 沿用上次，未被空值覆盖
 });
 
 test("eventKey: <prefix>events/dt=<received_at 日期>/<紧凑时间>_<event_id>_<tool>.json", () => {

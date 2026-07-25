@@ -1,4 +1,4 @@
-import { dayKeyLocal, effectiveTs, type StoredRecord, type WallHit } from "./merge.ts";
+import { dayKeyLocal, effectiveTs, type StoredRecord, type WallHit, type QuotaSnapshot } from "./merge.ts";
 
 /**
  * 从合并后的会话快照 + 撞墙历史算出看板报表。纯函数:同输入同输出,now 可注入(测试/重放用)。
@@ -54,10 +54,7 @@ export function buildStats(sessions: StoredRecord[], wallHits: readonly WallHit[
       tools: new Set<string>(),
       models: new Set<string>(),
       last_used: "",
-      quota_primary_pct: null as number | null,
-      quota_secondary_pct: null as number | null,
-      quota_plan: null as string | null,
-      quota_reached: null as string | null,
+      quota: null as QuotaSnapshot | null,
       quota_at: 0,
       hit_wall_today: false,
       hit_wall_7d: false,
@@ -76,14 +73,12 @@ export function buildStats(sessions: StoredRecord[], wallHits: readonly WallHit[
       agg.email = s.email;
       agg.department = s.department;
     }
-    if (s.quota_primary_pct != null || s.quota_secondary_pct != null) {
-      const qt = effectiveTs(s);
-      if (qt >= agg.quota_at) {
+    if (s.quota) {
+      // 取该人 quota.observed_at 最新的快照作为当前额度
+      const qt = s.quota.observed_at ? Date.parse(s.quota.observed_at) : effectiveTs(s);
+      if (!Number.isNaN(qt) && qt >= agg.quota_at) {
         agg.quota_at = qt;
-        agg.quota_primary_pct = s.quota_primary_pct ?? null;
-        agg.quota_secondary_pct = s.quota_secondary_pct ?? null;
-        agg.quota_plan = s.quota_plan ?? null;
-        agg.quota_reached = s.quota_reached ?? null;
+        agg.quota = s.quota;
       }
     }
     byEmail.set(k, agg);

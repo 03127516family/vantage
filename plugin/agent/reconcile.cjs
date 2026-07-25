@@ -11,6 +11,7 @@ const path = require("node:path");
 const core = require("./core.cjs");
 const { parseClaudeTranscript } = require("./parsers/claude-code.cjs");
 const { parseCodexRollout } = require("./parsers/codex.cjs");
+const { fetchCodexQuota } = require("./quota.cjs");
 
 // 只回看最近 N 天的会话，避免首次安装时把全部历史一次性灌上去
 const RECENT_DAYS = Number(process.env.VANTAGE_RECENT_DAYS || 7);
@@ -18,6 +19,8 @@ const RECENT_DAYS = Number(process.env.VANTAGE_RECENT_DAYS || 7);
 // 距上次成功的全量扫描不足 N 分钟就跳过本轮（只影响钩子路径；手动 sync、--only 定时任务、
 // setup 后的首次对账都不带 SessionStart 事件，不受节流）。
 const THROTTLE_MS = Number(process.env.VANTAGE_RECONCILE_INTERVAL_MIN || 30) * 60 * 1000;
+// Codex 账户额度（wham/usage）拉取节流：默认 1 小时。额度是 7 天窗、变化慢，没必要更频。
+const QUOTA_THROTTLE_MS = Number(process.env.VANTAGE_QUOTA_INTERVAL_MIN || 60) * 60 * 1000;
 // 死信/损坏文件保留天数
 const RETENTION_DAYS = Number(process.env.VANTAGE_RETENTION_DAYS || 14);
 // 插件自更新节流：SessionStart 时后台跑官方 CLI 检查更新（marketplace update + plugin update），
@@ -232,6 +235,26 @@ async function main() {
   // 若被 --only 单源扫描按安装闸口剪掉，后续身份变更就无从知道它该重传。
   core.pruneState(recentCutoff);
 
+  // Codex 账户额度（wham/usage）：本轮会扫 codex 才拉，1h 节流（节流的是“尝试”，失败也计数，
+  // 避免狂打 OpenAI 私有接口）。结果贴到当轮所有 Codex 记录；失败→null→记录不带 quota，服务端粘性沿用。
+  let codexQuota = null;
+  if (sources.some((s) => s.tool === "codex")) {
+    const qstate = core.readState();
+    const lastQ = Number(qstate.__last_quota_fetch__ || 0);
+    if (Date.now() - lastQ >= QUOTA_THROTTLE_MS) {
+      qstate.__last_quota_fetch__ = Date.now();
+      core.writeState(qstate);
+      codexQuota = await fetchCodexQuota();
+      core.log(
+        codexQuota
+          ? `quota: fetched plan=${codexQuota.plan_type} used=${codexQuota.used_percent}% reached=${codexQuota.limit_reached}`
+          : "quota: fetch failed (null), records will carry no quota this run"
+      );
+    } else {
+      core.log(`quota: throttled (last ${Math.round((Date.now() - lastQ) / 60000)}min ago)`);
+    }
+  }
+
   let totalFiles = 0;
   let swept = 0;
   for (const src of sources) {
@@ -263,6 +286,8 @@ async function main() {
         dedupe_key: `${parsed.tool}:${parsed.session_id}`,
         observed_at: new Date().toISOString(), // 快照生成时间(服务端据此判断新旧;旧名 collected_at)
       };
+      // 额度只贴 Codex（wham 是 OpenAI 账户额度；Claude Code 不沾）。
+      if (parsed.tool === "codex" && codexQuota) record.quota = codexQuota;
       core.writeSpool(record);
       core.markProcessed(file, st.size, st.mtimeMs);
       swept += 1;

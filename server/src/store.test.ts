@@ -73,13 +73,13 @@ test("replay: 启动回放同样按 effective_ts 合并(子进程验证)", () =>
 
 test("allWallHits: 撞墙历史即使被后续刷新快照覆盖也保留(spec §6.3)", () => {
   const before = store.allWallHits().length;
-  // 早上撞墙(quota_reached=primary)
-  store.upsert(rec({ session_id: "s-w", dedupe_key: "claude-code:s-w", name: "撞墙", quota_reached: "primary", observed_at: "2026-07-17T10:00:00.000Z" }));
-  // 下午窗口刷新(同会话,快照更新,quota_reached=null)——当前状态不再撞墙,但早上的事实必须留痕
-  store.upsert(rec({ session_id: "s-w", dedupe_key: "claude-code:s-w", name: "撞墙", quota_reached: null, observed_at: "2026-07-17T15:00:00.000Z" }));
+  // 早上撞墙(quota.limit_reached=true)
+  store.upsert(rec({ session_id: "s-w", dedupe_key: "claude-code:s-w", name: "撞墙", quota: { limit_reached: true, observed_at: "2026-07-17T10:00:00.000Z" }, observed_at: "2026-07-17T10:00:00.000Z" }));
+  // 下午窗口刷新(同会话,快照更新,limit_reached=false)——当前状态不再撞墙,但早上的事实必须留痕
+  store.upsert(rec({ session_id: "s-w", dedupe_key: "claude-code:s-w", name: "撞墙", quota: { limit_reached: false, observed_at: "2026-07-17T15:00:00.000Z" }, observed_at: "2026-07-17T15:00:00.000Z" }));
   const added = store.allWallHits().slice(before); // 这两条 upsert 新增的撞墙记录
-  assert.equal(added.length, 1);                   // 刷新那条 quota_reached=null 不计
-  assert.equal(added[0].type, "primary");
+  assert.equal(added.length, 1);                   // 刷新那条 limit_reached=false 不计
+  assert.equal(added[0].type, "rate_limit_reached");
   assert.equal(added[0].name, "撞墙");
   assert.equal(added[0].at, Date.parse("2026-07-17T10:00:00.000Z"));
 });

@@ -38,7 +38,6 @@ function parseCodexRollout(rolloutPath) {
   let totalTokens = 0;
   let cacheReadTokens = 0; // 命中缓存的输入 token（便宜很多，单列以便算准成本）
   let reasoningTokens = 0; // 推理 token
-  let rateLimits = null; // 当前额度用量：保留最后一次快照
   let model = "";
   let firstTs = "";
   let lastTs = "";
@@ -128,8 +127,7 @@ function parseCodexRollout(rolloutPath) {
         // 分模型明细用“本轮增量”last_token_usage（deltas 相加=total），归到当前模型
         const last = p.info && p.info.last_token_usage;
         if (last) accModel(model, last);
-        // 当前用量（额度）：Codex 每个 token_count 都带 rate_limits，留最后一次即会话结束时的额度状态
-        if (p.rate_limits && typeof p.rate_limits === "object") rateLimits = p.rate_limits;
+        // 额度（rate_limits）不再在此采集：rollout 里只有 0.6% 有数据，改由 reconcile 调 wham/usage 实时获取。
       }
       continue;
     }
@@ -162,31 +160,11 @@ function parseCodexRollout(rolloutPath) {
   }
 
   // 从 rate_limits 里安全取"已用百分比"（0 是合法值，只有缺失才返回 null）
-  const usedPct = (node) =>
-    node && node.used_percent != null && !Number.isNaN(Number(node.used_percent))
-      ? Number(node.used_percent)
-      : null;
-
-  // Codex 的 primary/secondary 槽位与窗口时长不固定:按 window_minutes 归类,
-  // 短窗(≤12h≈5小时)→primary,长窗(>12h≈7天)→secondary。实测 primary 装的是
-  // 7 天窗(window_minutes=10080),旧代码按槽位名取值导致 7 天数据被错标成 primary、secondary 显示 null
-  const classifyQuota = (rl) => {
-    let primary = null, secondary = null;
-    for (const node of [rl?.primary, rl?.secondary]) {
-      if (!node) continue;
-      const pct = usedPct(node);
-      if (pct === null) continue;
-      const mins = Number(node.window_minutes) || 0;
-      if (mins > 720) { if (secondary === null) secondary = pct; }
-      else { if (primary === null) primary = pct; }
-    }
-    return { primary, secondary };
-  };
+  // —— 已移除：额度改由 reconcile 调 wham/usage 实时获取（见 quota.cjs），rollout 不再产 quota_* 字段。
 
   // 空会话/启动碎片(无 AI 回复且无 token 消耗)不上传——Codex 反复启动会留下只有开头模板的碎片文件,避免灌库
   if (assistantMessages === 0 && totalTokens === 0) return null;
 
-  const quota = classifyQuota(rateLimits);
   return {
     tool: "codex",
     session_id: sessionId,
@@ -205,11 +183,7 @@ function parseCodexRollout(rolloutPath) {
     cache_creation_tokens: 0, // Codex 无独立的缓存写入计数
     reasoning_tokens: reasoningTokens,
     by_model: byModel, // 分模型明细：{ [model]: {requests,input,output,cache_read,cache_creation,reasoning} }
-    // 当前用量（额度）——short=约5小时窗，long=每周窗；used_percent=已用百分比
-    quota_primary_pct: quota.primary,
-    quota_secondary_pct: quota.secondary,
-    quota_plan: rateLimits ? rateLimits.plan_type || null : null,
-    quota_reached: rateLimits ? rateLimits.rate_limit_reached_type || null : null,
+    // 额度（quota）由 reconcile 调 wham 后注入，parser 不产。
     first_prompt: truncate(redact(firstPrompt), 300),
     summary: truncate(redact(firstPrompt), 120), // Codex 无 AI 标题，用首句提问
     // —— 内容增强（有界、隐私安全；详见 helpers.cjs）——

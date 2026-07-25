@@ -34,14 +34,14 @@ test("buildStats: 撞墙三字段(today/7d/last)+ 7 天外不算 7d", () => {
   assert.equal(Date.parse(u2.last_wall_hit), now - 8 * 86400e3);
 });
 
-test("buildStats: 额度取 effective_ts 最大者(迟到的旧快照不顶回)", () => {
+test("buildStats: 额度取 observed_at 最大者(迟到的旧快照不顶回)", () => {
   const now = Date.now();
   const older: StoredRecord = {
     dedupe_key: "codex:b1",
     session_id: "b1",
     tool: "codex",
     name: "乙",
-    quota_primary_pct: 95,
+    quota: { used_percent: 95, limit_reached: false, observed_at: iso(now - 7200e3) },
     observed_at: iso(now - 7200e3),
     received_at: iso(now - 1000), // 后到,但观测时间旧
   };
@@ -49,13 +49,13 @@ test("buildStats: 额度取 effective_ts 最大者(迟到的旧快照不顶回)"
     ...older,
     dedupe_key: "codex:b2",
     session_id: "b2",
-    quota_primary_pct: 30,
+    quota: { used_percent: 30, limit_reached: false, observed_at: iso(now - 3600e3) },
     observed_at: iso(now - 3600e3),
     received_at: iso(now - 2000),
   };
   const s = buildStats([older, newer], [], now);
   assert.equal(s.users.length, 1);
-  assert.equal(s.users[0].quota_primary_pct, 30);
+  assert.equal(s.users[0].quota.used_percent, 30);
 });
 
 test("buildStats: 按模型汇总(by_model 优先,老记录退回 model)", () => {
