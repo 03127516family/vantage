@@ -235,10 +235,12 @@ async function main() {
   // 若被 --only 单源扫描按安装闸口剪掉，后续身份变更就无从知道它该重传。
   core.pruneState(recentCutoff);
 
-  // Codex 账户额度（wham/usage）：本轮会扫 codex 才拉，1h 节流（节流的是“尝试”，失败也计数，
-  // 避免狂打 OpenAI 私有接口）。结果贴到当轮所有 Codex 记录；失败→null→记录不带 quota，服务端粘性沿用。
+  // Codex 账户额度（wham/usage）：只在 Codex 专用扫描（--only codex，由 OS 定时器 detached 触发）时拉。
+  // 不在全量 reconcile（Claude SessionStart）里拉——那会阻塞开会话最长 8s，且让 Claude 启动依赖
+  // OpenAI 接口可达性。1h 节流（节流的是“尝试”，失败也计数，避免狂打私有接口）。
+  // 结果贴到当轮所有 Codex 记录；失败→null→记录不带 quota，服务端粘性沿用。
   let codexQuota = null;
-  if (sources.some((s) => s.tool === "codex")) {
+  if (only === "codex") {
     const qstate = core.readState();
     const lastQ = Number(qstate.__last_quota_fetch__ || 0);
     if (Date.now() - lastQ >= QUOTA_THROTTLE_MS) {
