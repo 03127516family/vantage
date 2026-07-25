@@ -166,16 +166,16 @@ echo "== T16: cc-switch 同款 token 明细 + 当前用量(额度) =="
 # Codex S3：缓存读/推理 token + 额度快照（primary=5h, secondary=周）
 assert "T16 codex 缓存读 token"   "1200" "$($Q field "$S3" cache_read_tokens)"
 assert "T16 codex 推理 token"     "50"   "$($Q field "$S3" reasoning_tokens)"
-assert "T16 当前用量·5h额度%"      "16"   "$($Q field "$S3" quota_primary_pct)"
-assert "T16 当前用量·周额度%"      "84"   "$($Q field "$S3" quota_secondary_pct)"
-assert "T16 套餐类型"             "plus" "$($Q field "$S3" quota_plan)"
+# 额度不再由 parser 产（rollout 捡漏已移除）→ 改由 reconcile 调 wham/usage 注入 quota 对象。
+# wham 采集见 quota.cjs 单测；/stats 额度兼容见 T28-T35。这里校验 parser 不残留 quota_*。
+assert "T16 codex parser 不产 quota（已移至 wham）" "undefined" "$($Q field "$S3" quota_primary_pct)"
 # Claude S2：缓存读/写 token；Claude 无额度信息 -> 留空
 assert "T16 claude 缓存读 token"  "1500" "$($Q field "$S2" cache_read_tokens)"
 assert "T16 claude 缓存写 token"  "300"  "$($Q field "$S2" cache_creation_tokens)"
 # 缓存写分档（算成本用：5m 档 1.25 倍、1h 档 2 倍计价，拆开才能算准）
 assert "T16 claude 缓存写 5m 档"  "100"  "$($Q field "$S2" cache_creation_5m_tokens)"
 assert "T16 claude 缓存写 1h 档"  "200"  "$($Q field "$S2" cache_creation_1h_tokens)"
-assert "T16 claude 无额度信息"    "null" "$($Q field "$S2" quota_primary_pct)"
+assert "T16 claude 无额度信息"    "undefined" "$($Q field "$S2" quota_primary_pct)"
 
 echo "== T17: 分模型明细 by_model（一个会话多模型不丢模型维度）=="
 # S2 两轮分别用 opus / fable-5：token 各归各的模型，不再全算到末模型
@@ -390,7 +390,7 @@ curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-typ
 sleep 0.3
 STATS28="$(curl -s -H "Authorization: Bearer $TOKEN" "$LIVE/stats")"
 u28(){ echo "$STATS28" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=(JSON.parse(s).users||[]).find(x=>x.name==="撞墙测试");process.stdout.write(u==null?"MISSING":String(u[process.argv[1]]))})' "$1"; }
-assert "T28 当前额度=30%(窗口已刷新)"      "30"   "$(u28 quota_primary_pct)"
+assert "T28 当前额度=30%(窗口已刷新)"      "30"   "$(u28 quota_secondary_pct)"
 assert "T28 当前未撞墙(quota_reached=null)" "null" "$(u28 quota_reached)"
 assert "T28 仍记得今天撞过墙"              "true" "$(u28 hit_wall_today)"
 
@@ -406,7 +406,7 @@ curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-typ
 sleep 0.3
 STATS29="$(curl -s -H "Authorization: Bearer $TOKEN" "$LIVE/stats")"
 u29(){ echo "$STATS29" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=(JSON.parse(s).users||[]).find(x=>x.name==="额度测试");process.stdout.write(u==null?"MISSING":String(u[process.argv[1]]))})' "$1"; }
-assert "T29 当前额度取跨会话最新=88%" "88" "$(u29 quota_primary_pct)"
+assert "T29 当前额度取跨会话最新=88%" "88" "$(u29 quota_secondary_pct)"
 assert "T29 两会话都计入(sessions=2)"  "2"  "$(u29 sessions)"
 
 echo ""
@@ -487,7 +487,7 @@ curl -s -X POST "$LIVE/ingest" -H "Authorization: Bearer $TOKEN" -H "content-typ
 sleep 0.3
 STATS32="$(curl -s -H "Authorization: Bearer $TOKEN" "$LIVE/stats")"
 u32(){ echo "$STATS32" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=(JSON.parse(s).users||[]).find(x=>x.name==="额度新旧");process.stdout.write(u==null?"MISSING":String(u[process.argv[1]]))})' "$1"; }
-assert "T32 当前额度取 effective_ts 最新=30%" "30" "$(u32 quota_primary_pct)"
+assert "T32 当前额度取 effective_ts 最新=30%" "30" "$(u32 quota_secondary_pct)"
 
 echo ""
 echo "== T33: 插件自更新——SessionStart 后台检查一次,24h 节流;稳定副本不检查 =="
@@ -551,7 +551,7 @@ mkget "$WORK/lst.json"; ST="$(LD "$WORK/lst.json")"
 assert "T34 stats 200"           "200" "$(echo "$ST" | jget statusCode)"
 assert "T34 会话=2(同会话已合并)" "2"   "$(echo "$ST" | jbod total_sessions)"
 assert "T34 甲 token=150(取最新)" "150" "$(echo "$ST" | ulam "λ甲" total_tokens)"
-assert "T34 甲 当前额度=88"       "88"  "$(echo "$ST" | ulam "λ甲" quota_primary_pct)"
+assert "T34 甲 当前额度=88"       "88"  "$(echo "$ST" | ulam "λ甲" quota_secondary_pct)"
 assert "T34 watermark 非空"       "1"   "$(echo "$ST" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(JSON.parse(s).body).watermark?"1":"0"))')"
 
 echo "-- T35: 撞墙历史(撞墙→窗口刷新→/stats 仍记得;/stats 读时自动追平) --"
@@ -560,7 +560,7 @@ mkpost "{\"tool\":\"codex\",\"session_id\":\"$LW\",\"dedupe_key\":\"codex:$LW\",
 mkpost "{\"tool\":\"codex\",\"session_id\":\"$LW\",\"dedupe_key\":\"codex:$LW\",\"name\":\"λ墙\",\"quota_primary_pct\":30,\"quota_reached\":null,\"quota_plan\":\"plus\",\"observed_at\":\"$(iso_local 15)\"}" "$WORK/lw2.json"
 LD "$WORK/lw1.json" >/dev/null; LD "$WORK/lw2.json" >/dev/null
 mkget "$WORK/lws.json"; WST="$(LD "$WORK/lws.json")"   # 不显式 rebuild,/stats 内部先增量追平
-assert "T35 当前额度=30(窗口已刷新)" "30"   "$(echo "$WST" | ulam "λ墙" quota_primary_pct)"
+assert "T35 当前额度=30(窗口已刷新)" "30"   "$(echo "$WST" | ulam "λ墙" quota_secondary_pct)"
 assert "T35 当前未撞墙"              "null" "$(echo "$WST" | ulam "λ墙" quota_reached)"
 assert "T35 仍记得今天撞过墙"        "true" "$(echo "$WST" | ulam "λ墙" hit_wall_today)"
 assert "T35 本周撞墙"                "true" "$(echo "$WST" | ulam "λ墙" hit_wall_7d)"

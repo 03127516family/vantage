@@ -42,7 +42,7 @@ test("mergeInto: quota 粘性——新记录无 quota 时沿用上次(wham 失�
   assert.equal(got?.quota?.used_percent, 80); // quota 沿用上次，未被空值覆盖
 });
 
-test("normalizeQuota: 老双窗字段 → quota 对象（过渡兼容）", () => {
+test("normalizeQuota: 老双窗字段 → 补 quota 对象，旧字段保留（过渡兼容）", () => {
   const r = rec({
     quota_primary_pct: 16,
     quota_secondary_pct: 84,
@@ -51,8 +51,7 @@ test("normalizeQuota: 老双窗字段 → quota 对象（过渡兼容）", () =>
     observed_at: "2026-07-20T10:00:00.000Z",
   }) as any;
   normalizeQuota(r);
-  assert.equal(r.quota_plan, undefined); // 旧字段已删
-  assert.equal(r.quota_primary_pct, undefined);
+  assert.equal(r.quota_primary_pct, 16); // 旧字段保留（不删，供老消费者）
   assert.equal(r.quota?.used_percent, 84); // 优先 secondary(7d)
   assert.equal(r.quota?.plan_type, "plus");
   assert.equal(r.quota?.limit_reached, true); // quota_reached 非空 → 撞墙

@@ -141,8 +141,8 @@ export function dayKeyLocal(ts: number): string {
 /**
  * 规范化额度字段（过渡期双向兼容用）。
  * 老采集器发 quota_primary_pct/secondary_pct/plan/reached（双窗模型），新采集器发 quota 对象（单 7 天窗）。
- * 统一成 quota 对象存盘并删旧字段——S3 事件只留规范形状。stats 输出时再反推老字段供看板（见 stats.ts）。
- * 幂等：已是新形状（有 quota）直接返回。
+ * 给老记录补一个 quota 对象（权威），但**保留**老字段不删——让 S3 事件/老消费者/集成测试读老字段仍可用。
+ * stats 以 quota 对象为准；输出时另反推老字段供看板（见 stats.ts）。幂等：已有 quota 直接返回。
  */
 export function normalizeQuota(rec: UsageRecord): void {
   if (rec.quota) return;
@@ -162,10 +162,6 @@ export function normalizeQuota(rec: UsageRecord): void {
     reset_at: null,
     observed_at: rec.observed_at || rec.collected_at,
   };
-  delete rec.quota_primary_pct;
-  delete rec.quota_secondary_pct;
-  delete rec.quota_plan;
-  delete rec.quota_reached;
 }
 
 /**
