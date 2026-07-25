@@ -96,8 +96,15 @@ export function buildStats(sessions: StoredRecord[], wallHits: readonly WallHit[
   }
   return {
     total_sessions: sessions.length,
-    users: [...byEmail.values()].map(({ tools, models, quota_at, ...u }) => ({
+    users: [...byEmail.values()].map(({ tools, models, quota_at, quota, ...u }) => ({
       ...u,
+      quota,
+      // 过渡兼容：从 quota 反推老扁平字段，供未迁移的看板（读 quota_* 的老前端）继续工作。
+      // 新看板应直接读 quota 对象。老 5h 窗已不存在→quota_primary_pct 恒 null。
+      quota_primary_pct: null,
+      quota_secondary_pct: quota?.used_percent ?? null,
+      quota_plan: quota?.plan_type ?? null,
+      quota_reached: quota?.limit_reached ? "rate_limit_reached" : null,
       tools: [...tools],
       models: [...models],
     })),

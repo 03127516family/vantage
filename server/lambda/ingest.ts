@@ -2,7 +2,7 @@
 // 失败返回 502 让采集端下轮重传——会话快照语义,重传天然幂等。
 import { ulid } from "../src/ulid.ts";
 import { redactRecord } from "../src/redact.ts";
-import { eventKey, type StoredRecord, type UsageRecord } from "../src/merge.ts";
+import { eventKey, normalizeQuota, type StoredRecord, type UsageRecord } from "../src/merge.ts";
 
 export interface IngestDeps {
   putter: (key: string, body: string) => Promise<{ status: number }>;
@@ -22,6 +22,7 @@ export async function ingest(payload: unknown, deps: IngestDeps): Promise<Ingest
   );
   const stamped: StoredRecord[] = records.map((r) => {
     redactRecord(r); // 复查脱敏:采集端 redact 之外的兜底(spec §8)
+    normalizeQuota(r); // 过渡兼容:老采集器的 quota_* 双窗字段 → quota 对象(单窗)
     return { ...r, event_id: ulid(), received_at: new Date().toISOString() };
   });
   let failed = 0;

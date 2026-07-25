@@ -5,6 +5,7 @@ import { ulid } from "./ulid.ts";
 import {
   createMergeState,
   mergeInto,
+  normalizeQuota,
   dayKeyLocal,
   effectiveTs,
   type StoredRecord,
@@ -41,6 +42,7 @@ replay();
  * 信封(event_id/received_at)一律以服务端为准,客户端传入的同名字段被覆盖。
  */
 export function upsert(rec: UsageRecord): StoredRecord {
+  normalizeQuota(rec); // 过渡兼容：老采集器 quota_* → quota 对象（与 Lambda ingest 行为一致）
   const stored: StoredRecord = {
     ...rec,
     event_id: ulid(),

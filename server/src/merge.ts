@@ -61,6 +61,12 @@ export interface UsageRecord {
   // 当前用量(额度)——仅 Codex 记录带;由采集端调 wham/usage 实时注入(quota.cjs)。
   // 粘性合并:新记录无 quota 时沿用该 session 上次的 quota(见 mergeInto),避免 wham 失败时空值覆盖。
   quota?: QuotaSnapshot;
+  // @deprecated 过渡兼容:老采集器发的双窗额度字段(primary=5h,secondary=7d)。
+  // 新采集器只发 quota 对象(单 7 天窗)。normalizeQuota 会把老字段映射成 quota 后删掉;新代码勿读。
+  quota_primary_pct?: number | null;
+  quota_secondary_pct?: number | null;
+  quota_plan?: string | null;
+  quota_reached?: string | null;
   // 内容
   first_prompt?: string;
   summary?: string;
@@ -130,6 +136,36 @@ export function dayKeyLocal(ts: number): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/**
+ * 规范化额度字段（过渡期双向兼容用）。
+ * 老采集器发 quota_primary_pct/secondary_pct/plan/reached（双窗模型），新采集器发 quota 对象（单 7 天窗）。
+ * 统一成 quota 对象存盘并删旧字段——S3 事件只留规范形状。stats 输出时再反推老字段供看板（见 stats.ts）。
+ * 幂等：已是新形状（有 quota）直接返回。
+ */
+export function normalizeQuota(rec: UsageRecord): void {
+  if (rec.quota) return;
+  const hasLegacy =
+    rec.quota_primary_pct != null ||
+    rec.quota_secondary_pct != null ||
+    rec.quota_plan != null ||
+    rec.quota_reached != null;
+  if (!hasLegacy) return;
+  // 新模型只有 7 天窗：优先 secondary(7d)，回退 primary(老 5h)，保证至少有个数。
+  const used =
+    rec.quota_secondary_pct != null ? rec.quota_secondary_pct : rec.quota_primary_pct;
+  rec.quota = {
+    plan_type: rec.quota_plan ?? null,
+    used_percent: used != null ? Number(used) : undefined,
+    limit_reached: rec.quota_reached != null,
+    reset_at: null,
+    observed_at: rec.observed_at || rec.collected_at,
+  };
+  delete rec.quota_primary_pct;
+  delete rec.quota_secondary_pct;
+  delete rec.quota_plan;
+  delete rec.quota_reached;
 }
 
 /**

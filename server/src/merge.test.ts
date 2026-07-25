@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMergeState, mergeInto, eventKey, type StoredRecord } from "./merge.ts";
+import { createMergeState, mergeInto, eventKey, normalizeQuota, type StoredRecord } from "./merge.ts";
 
 function rec(over: object): StoredRecord {
   return {
@@ -40,6 +40,32 @@ test("mergeInto: quota 粘性——新记录无 quota 时沿用上次(wham 失�
   const got = st.index.get("codex:s1");
   assert.equal(got?.total_tokens, 999); // 新值生效
   assert.equal(got?.quota?.used_percent, 80); // quota 沿用上次，未被空值覆盖
+});
+
+test("normalizeQuota: 老双窗字段 → quota 对象（过渡兼容）", () => {
+  const r = rec({
+    quota_primary_pct: 16,
+    quota_secondary_pct: 84,
+    quota_plan: "plus",
+    quota_reached: "primary",
+    observed_at: "2026-07-20T10:00:00.000Z",
+  }) as any;
+  normalizeQuota(r);
+  assert.equal(r.quota_plan, undefined); // 旧字段已删
+  assert.equal(r.quota_primary_pct, undefined);
+  assert.equal(r.quota?.used_percent, 84); // 优先 secondary(7d)
+  assert.equal(r.quota?.plan_type, "plus");
+  assert.equal(r.quota?.limit_reached, true); // quota_reached 非空 → 撞墙
+  assert.equal(r.quota?.observed_at, "2026-07-20T10:00:00.000Z");
+});
+
+test("normalizeQuota: 已是新形状/无额度 → 不动", () => {
+  const neo: any = { quota: { used_percent: 50, limit_reached: false } };
+  normalizeQuota(neo);
+  assert.equal(neo.quota.used_percent, 50); // 不变
+  const bare: any = { total_tokens: 10 };
+  normalizeQuota(bare);
+  assert.equal(bare.quota, undefined); // 无额度字段，不加 quota
 });
 
 test("eventKey: <prefix>events/dt=<received_at 日期>/<紧凑时间>_<event_id>_<tool>.json", () => {
