@@ -113,8 +113,10 @@ INGEST_TOKEN="<专属密钥>" PORT=3000 npm start
 
 ### 3. 员工安装（跑一次，全在 Claude Code 里）
 
+完整安装流程见 [docs/install.md](docs/install.md)。速览：
+
 ```
-/plugin marketplace add 03127516family/vantage   # 指向源仓库（owner/repo）
+/plugin marketplace add x-dream-works/vantage   # 指向源仓库（owner/repo）
 /plugin install vantage@dgcrane
 /reload-plugins                                  # 刷新斜杠命令索引（v2.1.98+ 装完即可用，老版本重启一次）
 /vantage:setup                                   # 按提示填姓名即可（部门按公司通讯录自动填）
