@@ -2,205 +2,108 @@
 
 > 团队 AI 编程助手使用情况的制高点视野 — by dgcrane
 
-自动采集团队 **Claude Code** 与 **Codex** 的使用情况（用量 + 内容摘要），帮助管理者一览「谁在用、用得多不多、够不够用」。
+Vantage 员工端插件，自动采集 **Claude Code** 与 **Codex** 的使用情况（用量 + 内容摘要），上报到公司看板，帮助管理者一览「谁在用、用得多不多、够不够用」。
 
-以 **Claude Code 插件**分发：员工装上插件、跑一次 `/vantage:setup` 填身份，之后**全自动、零操作、无感**。
-
----
-
-## 特性
-
-- **Claude Code 插件形态** —— 员工通过内部 marketplace 一键安装；插件自更新：每次 SessionStart 后台静默检查（2h 节流），有新版本落盘、下次会话生效，员工零操作。
-- **两个工具，一套管道** —— Claude Code 与 Codex 复用同一套采集/缓冲/上传/去重逻辑，只有会话解析器不同。
-- **自动触发，员工无感** —— 钩子只写本地队列、瞬间返回，绝不阻塞员工；任何异常都咽下、永不干扰。
-- **可靠同步，不丢不重** —— 本地 spool 队列 + 原子写 + 重试，断网/关机不丢；按 `session_id` 去重（upsert），重复触发/重试/对账都不重复计数。
-- **升级安全** —— Codex 触发只依赖自装的登录触发器，不碰 Codex 配置；会话解析全部容错，格式变动只少抓字段、不崩。
-- **零常驻、零轮询** —— Claude 靠插件钩子，Codex 靠登录触发，均事件驱动。
+服务端仓库：[x-dream-works/vantage](https://github.com/x-dream-works/vantage)
 
 ---
 
-## 架构与数据流
+## 员工安装（Claude Code 内执行）
 
-```
-  员工机器                                            dgcrane 后端
-  ┌───────────────────────────────────────┐        ┌──────────────────────┐
-  │  [Vantage 插件] Claude Code             │        │                      │
-  │    ├ SessionEnd 钩子 → capture ─┐       │  POST  │  /ingest (鉴权)       │
-  │    └ SessionStart 钩子 → reconcile┤─►采集─┼──────► │   └─ upsert(session)  │
-  │  [登录触发器] Codex → reconcile ─┘  ▼    │  重试  │  JSONL 存储           │
-  │                          本地 spool 队列 │◄─────┐ │  /stats (鉴权)/health │
-  │                          state.json 记账 │      │ └──────────────────────┘
-  │                            flush（重试/死信/超龄）┘
-  └───────────────────────────────────────┘
+```text
+/plugin marketplace add x-dream-works/vantage
+/plugin install vantage@dgcrane
+/reload-plugins
+/vantage:setup
 ```
 
-- **采集**：钩子/对账解析会话 → 生成用量+摘要 → 原子写本地 `spool`，`state.json` 记账。
-- **上传**：`flush` 读 `spool` → 带重试 POST → 成功即删；失败留着补传，永久失败/超龄进 `dead`。
-- **去重**：后端按 `session_id` 覆盖更新，重复上传无害、绝不重复计数。
+- 按 `/vantage:setup` 提示输入姓名（部门按公司通讯录自动填）
+- 安装完成后**无需任何操作**，插件会在后台自动采集
 
 ---
 
-## 目录结构
-
-```
-vantage/
-├── .claude-plugin/
-│   └── marketplace.json          # 内部 marketplace 清单（列出 vantage 插件）
-├── plugin/                       # ← Claude Code 插件本体
-│   ├── .claude-plugin/plugin.json
-│   ├── hooks/hooks.json          #   自带钩子：SessionEnd→capture、SessionStart→reconcile
-│   ├── skills/setup/SKILL.md     #   /vantage:setup 命令
-│   ├── setup.cjs                 #   跨平台 setup：写配置 + 同步 agent + 装 Codex 触发器
-│   ├── vantage.defaults.json     #   管理员预置后端地址/密钥（员工无需填）
-│   ├── roster.json               #   公司花名册（姓名→部门，setup 自动填部门用；由通讯录生成）
-├── tools/
-│   └── gen-roster.cjs            # 花名册生成器：node tools/gen-roster.cjs <通讯录.xlsx>（人员变动时重跑）
-│   └── agent/                    #   采集脚本（零依赖纯 Node）
-│       ├── core.cjs              #     共享核心：配置/原子写/spool/state/HTTP/脱敏/进程
-│       ├── parsers/{claude-code,codex}.cjs
-│       ├── capture.cjs           #     SessionEnd 采当前会话
-│       ├── reconcile.cjs         #     SessionStart 兜底对账 / Codex 登录触发
-│       └── flush.cjs             #     上传器：重试/死信/超龄/原子并发锁
-├── tests/                        # 自包含端到端测试
-│   ├── run-tests.sh · qserver.cjs · fixtures/
-└── server/                       # dgcrane 自建后端（Node/TS）
-    ├── src/{index,store}.ts      #   /ingest /stats /health（均鉴权）+ JSONL upsert
-    ├── src/{s3,archive}.ts       #   S3 异步归档（不可变事件；未配置 S3 环境变量则停用）
-    ├── scripts/                  #   npm run smoke:s3（冒烟）/ restore:s3（灾难恢复）
-    └── data/                     #   usage.jsonl（运行时生成）
-```
-
-> 上报在写本地 JSONL 的同时异步归档到 AWS S3（append-only 不可变事件，撞墙历史永不丢）。
-> 部署见 [docs/s3-setup.md](docs/s3-setup.md)，设计见 [docs/superpowers/specs/2026-07-17-s3-storage-design.md](docs/superpowers/specs/2026-07-17-s3-storage-design.md)。
-
----
-
-## 采集了什么
+## 采集范围
 
 | 类别 | 字段 |
 |---|---|
-| 身份 | 姓名、部门、主机名（setup 时只填姓名，部门按公司通讯录自动填；不登记邮箱） |
+| 身份 | 姓名、部门、主机名（不登记邮箱） |
 | 会话 | 工具、session_id、项目路径、开始/结束时间、时长 |
-| 用量 | 用户消息数、助手消息数、工具调用数、输入/输出/合计 token、分模型明细、使用的模型 |
-| 额度 | Codex 当前额度使用率（5 小时/周）、套餐类型（Claude 无此数据则留空） |
-| 内容 | 摘要（Claude 优先取 AI 标题，否则首句提问；Codex 取首句提问）、首句提问（截断） |
+| 用量 | 消息数、输入/输出/合计 token、分模型明细、使用的模型 |
+| 额度 | Codex 当前额度使用率、套餐类型 |
+| 内容 | 摘要、首句提问（均脱敏+截断） |
 
-**隐私**：只存摘要与首句提问，不存完整对话；均经脱敏（邮箱/密钥/JWT/URL 凭据/长 token 串）与截断。
-安装话术（setup 技能）向员工如实披露上述全部采集范围与上传去向，上线前请依据当地法规确认披露充分。
+**隐私**：不存完整对话；邮箱/密钥/JWT/URL 凭据/长 token 串会脱敏。
 
 ---
 
-## 部署与安装
+## 触发机制
 
-### 1. 部署后端（dgcrane 一次）
+| 工具 | 触发方式 |
+|------|----------|
+| Claude Code | `SessionEnd` / `SessionStart` 插件钩子 |
+| Codex | OS 登录触发器（macOS LaunchAgent / Linux systemd / Windows Task Scheduler） |
 
-```bash
-cd server && npm install
-INGEST_TOKEN="<专属密钥>" PORT=3000 npm start
-```
+---
 
-正式部署放到内网可达地址（如 `https://vantage.dgcrane.com`），设置专属 `INGEST_TOKEN`。
+## 管理员预置
 
-### 2. 管理员预置插件（一次）
-
-编辑 `plugin/vantage.defaults.json`，把后端地址与上传密钥填进去（员工便无需填写）：
+编辑 `plugin/vantage.defaults.json`，填入后端地址与上传密钥：
 
 ```json
-{ "server_url": "https://vantage.dgcrane.com", "token": "<专属密钥>" }
+{
+  "server_url": "https://vantage.dgcrane.com",
+  "token": "<专属密钥>"
+}
 ```
 
-把仓库推到内部 git（作为 marketplace）。
-
-### 3. 员工安装（跑一次，全在 Claude Code 里）
-
-完整安装流程见 [docs/install.md](docs/install.md)。速览：
-
-```
-/plugin marketplace add x-dream-works/vantage   # 指向源仓库（owner/repo）
-/plugin install vantage@dgcrane
-/reload-plugins                                  # 刷新斜杠命令索引（v2.1.98+ 装完即可用，老版本重启一次）
-/vantage:setup                                   # 按提示填姓名即可（部门按公司通讯录自动填）
-```
-
-`/vantage:setup` 会写好配置、同步采集脚本到稳定副本、安装 Codex 登录触发器。之后员工**无需任何操作**。
-
-### 4. 查看数据
-
-```bash
-curl -s -H "Authorization: Bearer <密钥>" http://localhost:3000/stats
-```
+员工 setup 时无需手动填写。
 
 ---
 
-## 触发与同步机制
+## 卸载
 
-| 工具 | 采集触发 | 兜底 |
-|---|---|---|
-| **Claude Code** | 插件自带 `SessionEnd` 钩子：会话结束即采当前 | 插件自带 `SessionStart` 钩子：开新会话时对账历史、补没同步的（跳过当前） |
-| **Codex** | 登录触发器（LaunchAgent / systemd / 计划任务）：登录时对账 `~/.codex/sessions` | 与 SessionStart 对账共享同一套逻辑 |
+```text
+/vantage:uninstall
+```
 
-- **无感**：钩子只写本地 spool 瞬间返回，上传由分离进程异步完成。
-- **不漏**：正常退出即时采；异常关闭由下次「开会话 / 登录」对账补上（`state.json` 按 `size+mtime` 只补变化过的）。
-- **不重**：每次上传是该会话的完整快照，后端 upsert 只保留最新。
-- **可靠**：spool 是重试队列，传成功才删；断网/维护时留本地，下次触发补传。
-- **升级安全**：Claude 钩子跑插件内脚本（随插件更新）；Codex 触发器跑 `~/.vantage/agent/` 稳定副本，`reconcile` 每次会把插件版同步过去——Codex 怎么升级都不失效。
-- **自更新**：`reconcile` 在 SessionStart 时后台派生 `claude plugin marketplace update && claude plugin update`（官方 CLI，输出进 `agent.log`，失败咽下），2h 节流、先盖章再派生；稳定副本路径不检查。**发版必须 bump `plugin/.claude-plugin/plugin.json` 的 `version`**——官方按版本串判定更新，光推 commit 不 bump 员工端永远"已是最新"。
-
-**Codex 为何不用 `notify`**：其 `notify` 单槽位且常被自身占用，改写会破坏、升级会重置。改用自己的登录触发器，完全不碰 Codex 配置。
+然后 `/exit` 重新打开 Claude Code 让卸载彻底生效。
 
 ---
 
 ## 配置项
 
-**员工机器** `~/.vantage/config.json`（setup 以 0600 权限生成）
+`~/.vantage/config.json`（setup 以 0600 权限生成）：
 
 ```json
-{ "name": "张三", "department": "外贸部",
-  "server_url": "https://vantage.dgcrane.com", "token": "<密钥>" }
+{
+  "name": "张三",
+  "department": "外贸部",
+  "server_url": "https://vantage.dgcrane.com",
+  "token": "<密钥>"
+}
 ```
 
-**环境变量（调优，均有默认值）**
+**环境变量（调优）**
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `VANTAGE_RECENT_DAYS` | 7 | 对账只回看最近 N 天，避免首装灌全部历史 |
-| `VANTAGE_RETENTION_DAYS` | 14 | 死信/损坏文件保留天数 |
-| `VANTAGE_SPOOL_MAX_AGE_DAYS` | 7 | spool 超此时长仍失败则进死信 |
+| `VANTAGE_RECENT_DAYS` | 7 | 对账只回看最近 N 天 |
 | `VANTAGE_SKIP_TRIGGER` | 0 | setup 时跳过 Codex 触发器（测试用） |
-| `VANTAGE_SELF_UPDATE_INTERVAL_H` | 2 | 插件自更新检查间隔（小时），0=每次 SessionStart 都查 |
-| `VANTAGE_DISABLE_SELF_UPDATE` | 空 | 置非空则关闭插件自更新（测试/运维逃生开关） |
-
-**后端**：`INGEST_TOKEN`、`PORT`、`VANTAGE_DATA_DIR`（数据目录）。
+| `VANTAGE_SELF_UPDATE_INTERVAL_H` | 2 | 插件自更新检查间隔（小时） |
+| `VANTAGE_DISABLE_SELF_UPDATE` | 空 | 置非空则关闭插件自更新 |
 
 ---
 
 ## 运维
 
-- **看积压**：`~/.vantage/spool/` 空 = 都传上去了；非空 = 待补传（下次触发自动重试）。
-- **日志**：`~/.vantage/agent.log`（自动滚动，超 1MB 留一份 `.log.1`）。
-- **死信**：`~/.vantage/dead/`（永久失败/超龄，保留期后自动清）。
-- **卸载**：`/plugin uninstall vantage@dgcrane`；卸载 Codex 触发器
-  （mac：`launchctl bootout gui/$(id -u)/com.dgcrane.vantage.codex`；
-  win：删除"启动"文件夹里的 `vantage-codex.vbs`，并 `schtasks /Delete /TN VantageCodexDaily /F`；
-  linux：`systemctl --user disable --now vantage-codex.service`）；删 `~/.vantage/`。
+- **看积压**：`~/.vantage/spool/` 空 = 都传上去了
+- **日志**：`~/.vantage/agent.log`
+- **死信**：`~/.vantage/dead/`
 
 ---
 
-## 测试
+## 发版注意
 
-```bash
-bash tests/run-tests.sh   # 自包含：临时沙箱 + 隔离后端 + 合成样本，不污染真实环境
-```
+每次发版务必 bump `plugin/.claude-plugin/plugin.json` 里的 `version`，否则员工端不会自动更新。
 
----
-
-## 已知边界
-
-- **纯 Codex、且从不重启/登录的机器**：会话到下次登录才同步（不丢，只延迟）。
-- **会话异常结束后员工再也不开该工具**：该次可能采不到（已确认可接受）。
-- **共享 token 信任模型**：所有员工用同一上传密钥，理论上可伪造他人记录；内部可信环境下可接受，如需强隔离应改为按人分发 token 并在服务端绑定身份。
-- **会话文件格式**为各工具内部实现，可能随版本变化；解析器容错，变动只影响个别字段的抓取精度，不影响触发与同步。
-- **改名/重新 setup 后，撞墙历史按旧名归因会丢失**:`/stats` 的 `hit_wall_today`/`hit_wall_7d`/`last_wall_hit` 按"撞墙当时的姓名"归到人；改名后老撞墙记录匹配不上新名，这些字段不再体现（当前额度、用量统计不受影响）。根因是系统按姓名聚合、无稳定用户身份（见设计文档 §2.3 不引入 user_id 的取舍）。
-- (Lambda 形态)`state/index.jsonl` 为单文件合并索引,随使用增长;1GB 内存约撑 2 年重度使用,到期需把老会话折叠进 per-user 累计器(另立项)。
-- (Lambda 形态)采集端重试会产生重复事件文件(不同 event_id、同 dedupe_key),合并结果正确但多占存储;量小,不处理。
-- (Lambda 形态)事件为大量小 JSON 文件(每年约百万级),S3 对此无感;如需可配生命周期转 Glacier 或做月度压缩,不影响热路径。
+插件会在每次 `SessionStart` 时后台检查 marketplace 新版本，2 小时节流，自动更新。
