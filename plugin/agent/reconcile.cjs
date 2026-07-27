@@ -2,7 +2,7 @@
 "use strict";
 // Vantage —— 会话扫描/对账（reconcile）。
 // Claude：由 SessionStart 钩子调用（开新会话时兜底补采）；
-// Codex：由 OS 触发器在登录时/每天正午调用（--only codex），增量扫 ~/.codex/sessions 采集（cc-switch 同款思路，免钩子/免信任）。
+// Codex：由 OS 触发器在登录时/每小时/文件变化时调用（--only codex），增量扫 ~/.codex/sessions 采集（cc-switch 同款思路，免钩子/免信任）。
 // 职责：扫历史会话，把"没采到/断网没传成功"的补上（跳过当前刚开的会话），
 // 顺手清理死信/损坏文件、剪枝 state、触发上传。永远 exit 0、不打印 stdout。
 const fs = require("node:fs");
@@ -21,6 +21,10 @@ const RECENT_DAYS = Number(process.env.VANTAGE_RECENT_DAYS || 7);
 const THROTTLE_MS = Number(process.env.VANTAGE_RECONCILE_INTERVAL_MIN || 30) * 60 * 1000;
 // Codex 账户额度（wham/usage）拉取节流：默认 1 小时。额度是 7 天窗、变化慢，没必要更频。
 const QUOTA_THROTTLE_MS = Number(process.env.VANTAGE_QUOTA_INTERVAL_MIN || 60) * 60 * 1000;
+// Codex 定时触发节流：默认 30 分钟
+const CODEX_SCHEDULED_THROTTLE_MS = Number(process.env.VANTAGE_CODEX_SCHEDULED_INTERVAL_MIN || 30) * 60 * 1000;
+// Codex 事件触发节流：默认 5 分钟（仅 macOS WatchPaths 使用）
+const CODEX_EVENT_THROTTLE_MS = Number(process.env.VANTAGE_CODEX_EVENT_INTERVAL_MIN || 5) * 60 * 1000;
 // 死信/损坏文件保留天数
 const RETENTION_DAYS = Number(process.env.VANTAGE_RETENTION_DAYS || 14);
 // 插件自更新节流：SessionStart 时后台跑官方 CLI 检查更新（marketplace update + plugin update），
@@ -150,18 +154,21 @@ function cleanupOld() {
   }
 }
 
-// 解析 --only <tool>：限定只扫某个数据源（Codex 定时任务用 --only codex）
-function parseOnly(argv) {
-  const i = argv.indexOf("--only");
-  return i >= 0 ? argv[i + 1] : null;
+function parseArgs(argv) {
+  const out = { only: null, trigger: "scheduled" };
+  const onlyIdx = argv.indexOf("--only");
+  if (onlyIdx >= 0 && argv[onlyIdx + 1]) out.only = argv[onlyIdx + 1];
+  const triggerIdx = argv.indexOf("--trigger");
+  if (triggerIdx >= 0 && argv[triggerIdx + 1]) out.trigger = argv[triggerIdx + 1];
+  return out;
 }
 
 async function main() {
   core.ensureDirs();
   const cfg = core.loadConfig();
 
-  const only = parseOnly(process.argv);
-  const sources = only ? SOURCES.filter((s) => s.tool === only) : SOURCES;
+  const args = parseArgs(process.argv);
+  const sources = args.only ? SOURCES.filter((s) => s.tool === args.only) : SOURCES;
 
   // 当前刚开的会话：从 SessionStart 的 stdin 拿 session_id，扫描时跳过它
   let currentSessionId = "";
@@ -182,7 +189,7 @@ async function main() {
   // Windows:Codex 触发器自检自愈——自更新只同步脚本文件,触发器(装没装/机制换没换)
   // 由这里顺带保证,员工永远不需要为触发器重跑 setup。非 win32 内部直接返回。
   try {
-    require("./trigger.cjs").ensureWindowsCodexTrigger({ log: core.log });
+    require("./trigger.cjs").ensureCodexTriggers({ log: core.log });
   } catch (e) {
     core.log(`codex 触发器自检异常(已忽略):${e.message}`);
   }
@@ -200,13 +207,25 @@ async function main() {
     }
   }
 
+  // Codex-only 路径的独立节流
+  if (args.only === "codex") {
+    const state = core.readState();
+    const throttleMs = args.trigger === "event" ? CODEX_EVENT_THROTTLE_MS : CODEX_SCHEDULED_THROTTLE_MS;
+    const last = Number(state[`__last_codex_${args.trigger}__`] || 0);
+    if (Date.now() - last < throttleMs) {
+      core.log(`reconcile: codex throttled (trigger=${args.trigger}, last ${Math.round((Date.now() - last) / 60000)}min ago)`);
+      core.spawnDetached("flush.cjs");
+      return;
+    }
+  }
+
   // 身份变更检测：setup 改了 name/email/department 后（含"从未配置 -> 首次配置"），
   // 把"已采过"的会话标记清空并记入 restamp 集合，强制本轮用新身份重传——服务端按
   // session_id upsert 覆盖，旧记录自动拿到正确身份。修"先用了再 setup，身份卡死成机器名"。
   // 只在全量扫描时做：--only 单源扫描（如 launchd RunAtLoad 的 --only codex）若消耗了
   // 这个标记，另一数据源里卡空身份的会话就永远等不到重传。
   const restamp = new Set();
-  if (!only) {
+  if (!args.only) {
     const idKey = JSON.stringify([cfg.name || "", cfg.email || "", cfg.department || ""]);
     const state = core.readState();
     const prev = state.__identity__ ?? "";
@@ -240,7 +259,7 @@ async function main() {
   // OpenAI 接口可达性。1h 节流（节流的是“尝试”，失败也计数，避免狂打私有接口）。
   // 结果贴到当轮所有 Codex 记录；失败→null→记录不带 quota，服务端粘性沿用。
   let codexQuota = null;
-  if (only === "codex") {
+  if (args.only === "codex") {
     const qstate = core.readState();
     const lastQ = Number(qstate.__last_quota_fetch__ || 0);
     if (Date.now() - lastQ >= QUOTA_THROTTLE_MS) {
@@ -299,8 +318,16 @@ async function main() {
   core.log(
     `reconcile: found ${totalFiles} files, spooled ${swept} unsynced (skip=${currentSessionId || "none"})`
   );
-  // 只有全量扫描才更新节流时间戳：--only 单源扫没覆盖另一数据源，不能挡住后续的全量扫。
-  if (!only) {
+
+  // 只有真正执行了扫描才更新对应触发源的时间戳（节流路径已 return）
+  if (args.only === "codex") {
+    const state = core.readState();
+    state[`__last_codex_${args.trigger}__`] = Date.now();
+    core.writeState(state);
+  }
+
+  // 全量扫描的 __last_reconcile__ 仅在非 --only 时更新（避免单源扫描污染全量扫描的节流）
+  if (!args.only) {
     const state = core.readState();
     state.__last_reconcile__ = Date.now();
     core.writeState(state);
