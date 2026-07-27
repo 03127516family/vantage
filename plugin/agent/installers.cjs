@@ -120,7 +120,7 @@ function installSystemd(node, reconcile) {
 Description=Vantage - Codex 会话扫描采集
 [Service]
 Type=oneshot
-ExecStart=${node} ${reconcile} --only codex --trigger scheduled
+ExecStart="${node}" "${reconcile}" --only codex --trigger scheduled
 `
   );
   fs.writeFileSync(
@@ -204,16 +204,31 @@ function installWindowsCodexTrigger({ log = () => {} } = {}) {
     </Exec>
   </Actions>
 </Task>`;
-    fs.writeFileSync(xmlPath, xml);
+    fs.writeFileSync(xmlPath, Buffer.from(`﻿${xml}`, "utf16le"));
     try {
       schtasks(["/Create", "/TN", TASK_NAME, "/XML", xmlPath, "/F"]);
       log("✓ Codex 每小时兜底任务已注册（计划任务，错过补跑）");
     } catch (e) {
+      // UTF-16 仍失败时回退到 CLI；CLI 无法直接设置 StartWhenAvailable，
+      // 因此先创建再删除、用导出的 XML 改 Settings 后重建。
       schtasks([
         "/Create", "/TN", TASK_NAME, "/SC", "HOURLY", "/TR",
         `wscript.exe "${runVbs}"`, "/F",
       ]);
-      log("! Codex XML 任务创建失败，已回退到每小时命令行任务：" + e.message);
+      try {
+        const exported = schtasks(["/Query", "/TN", TASK_NAME, "/XML"]);
+        const patched = exported.replace(
+          "<Settings>",
+          "<Settings>\n    <StartWhenAvailable>true</StartWhenAvailable>"
+        );
+        fs.writeFileSync(xmlPath, Buffer.from(`﻿${patched}`, "utf16le"));
+        schtasks(["/Delete", "/TN", TASK_NAME, "/F"]);
+        schtasks(["/Create", "/TN", TASK_NAME, "/XML", xmlPath, "/F"]);
+        log("✓ Codex CLI 任务已重建为 XML（含 StartWhenAvailable）");
+      } catch (e2) {
+        log("! Codex XML 任务创建失败，已回退到每小时命令行任务：" + e.message);
+        log("! 无法保证 StartWhenAvailable，建议手动检查：" + e2.message);
+      }
     }
   }
 

@@ -191,10 +191,13 @@ function readStdin(timeoutMs = 1500) {
   });
 }
 
-/** 分离式启动同目录下的另一个入口（如 flush.cjs）：不等待、不阻塞钩子。 */
-function spawnDetached(scriptName) {
+/** 分离式启动另一个 Node 脚本（绝对路径或相对 __dirname）。不等待、不阻塞。 */
+function spawnDetached(scriptNameOrPath) {
   try {
-    const child = spawn(process.execPath, [path.join(__dirname, scriptName)], {
+    const scriptPath = path.isAbsolute(scriptNameOrPath)
+      ? scriptNameOrPath
+      : path.join(__dirname, scriptNameOrPath);
+    const child = spawn(process.execPath, [scriptPath], {
       detached: true,
       stdio: "ignore",
     });
@@ -204,10 +207,13 @@ function spawnDetached(scriptName) {
   }
 }
 
-/** 分离式跑一段 shell 命令串（如插件自更新检查）：不等待、不阻塞钩子，输出由命令串自行重定向。 */
+/** 分离式跑一段 shell 命令串：不等待、不阻塞钩子，输出由命令串自行重定向。 */
 function spawnShellDetached(command) {
   try {
-    const child = spawn("sh", ["-c", command], {
+    const isWin = process.platform === "win32";
+    const shell = isWin ? "cmd.exe" : "sh";
+    const arg = isWin ? "/c" : "-c";
+    const child = spawn(shell, [arg, command], {
       detached: true,
       stdio: "ignore",
     });

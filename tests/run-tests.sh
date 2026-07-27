@@ -598,6 +598,11 @@ echo "$OUT37" | grep -qF "claude plugin uninstall vantage@dgcrane" && ok "T37 de
 echo "$OUT37" | grep -qF "claude plugin marketplace remove dgcrane" && ok "T37 detached 移除市场命令" || no "T37 移除市场命令" "有" "无"
 
 echo ""
+echo "== T38: plugin 安装器跨平台边界（systemd 引号 / Windows XML 回退 / 分离 shell）=="
+node "$SCRIPT_DIR/plugin-installers.test.cjs" && ok "T38 plugin 安装器单元测试通过" \
+  || no "T38 plugin 安装器单元测试通过" "是" "否"
+
+echo ""
 echo "======================================================"
 echo " 结果: PASS=$PASS  FAIL=$FAIL"
 echo "======================================================"

@@ -68,6 +68,20 @@ function uninstallPluginCache() {
   rm(path.join(root, "marketplaces", "dgcrane"));
 }
 
+// 生成跨平台 detached 卸载脚本(用 node setTimeout 替代 Unix sleep,Windows 也能跑)
+function writeDetachedUninstallScript() {
+  const tmpDir = os.tmpdir();
+  const scriptPath = path.join(tmpDir, `.vantage-uninstall-${process.pid}.js`);
+  const script = `const { execFileSync } = require("node:child_process");
+setTimeout(() => {
+  try { execFileSync("claude", ["plugin", "uninstall", "vantage@dgcrane"], { stdio: "ignore" }); } catch {}
+  try { execFileSync("claude", ["plugin", "marketplace", "remove", "dgcrane"], { stdio: "ignore" }); } catch {}
+}, 2000);
+`;
+  fs.writeFileSync(scriptPath, script);
+  return scriptPath;
+}
+
 function main() {
   console.log("== Vantage 卸载 ==");
   // 1. 卸 OS 触发器(按平台)
@@ -79,12 +93,13 @@ function main() {
   rm(core.BASE_DIR);
   // 3. 删插件缓存
   uninstallPluginCache();
-  // 4. detached 延迟卸插件本体:skill 退出后 2 秒由独立进程执行,绕开自卸载竞态
-  const pluginCmd = "sleep 2 && claude plugin uninstall vantage@dgcrane && claude plugin marketplace remove dgcrane";
+  // 4. detached 延迟卸插件本体:skill 退出后 2 秒由独立 node 进程执行,绕开自卸载竞态
+  const pluginHumanCmd = "claude plugin uninstall vantage@dgcrane && claude plugin marketplace remove dgcrane";
   if (SKIP_PLUGIN || DRYRUN) {
-    console.log(`[dryrun/skip] spawnShellDetached: ${pluginCmd}`);
+    console.log(`[dryrun/skip] spawnDetached: node <temp-script> (${pluginHumanCmd})`);
   } else {
-    core.spawnShellDetached(pluginCmd);
+    const pluginScript = writeDetachedUninstallScript();
+    core.spawnDetached(pluginScript);
   }
   console.log(`✓ 已卸载(触发器 + ~/.vantage + 缓存${!SKIP_PLUGIN && !DRYRUN ? " + 插件本体(2秒后自动)" : ""})`);
   console.log("→ 请重启 Claude 会话(/exit 后重开,或 /reload-plugins)让卸载彻底生效。");
