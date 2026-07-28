@@ -93,7 +93,17 @@ test("normalizeQuota: 完整 wham/usage 响应 → 提取 primary_window 为标�
   assert.equal(raw.quota.observed_at, "2026-07-27T10:00:00.000Z");
 });
 
-test("eventKey: <prefix>events/dt=<received_at 日期>/<紧凑时间>_<event_id>_<tool>.json", () => {
-  const k = eventKey(rec({ event_id: "01J", received_at: "2026-07-20T10:00:15.123Z" }), "vantage-prod/");
-  assert.equal(k, "vantage-prod/events/dt=2026-07-20/20260720T100015.123Z_01J_codex.json");
+test("eventKey: <prefix>events/dt=<received_at 日期>/<紧凑时间>_<event_id>_<who>_<tool>.json", () => {
+  const k = eventKey(
+    rec({ event_id: "01J", received_at: "2026-07-20T10:00:15.123Z", name: "赵六", tool: "codex" }),
+    "vantage-prod/"
+  );
+  assert.equal(k, "vantage-prod/events/dt=2026-07-20/20260720T100015.123Z_01J_zhaoliu_codex.json");
+});
+
+test("eventKey: 无名/英文名/空名时退回 machine/unknown", () => {
+  const k1 = eventKey(rec({ event_id: "01K", received_at: "2026-07-20T10:00:15.123Z", name: "", machine: "MacBook" }));
+  assert.ok(k1.includes("_macbook_") || k1.includes("_acook_"), `应含 machine 或 name 拼音: ${k1}`);
+  const k2 = eventKey(rec({ event_id: "01L", received_at: "2026-07-20T10:00:15.123Z", name: "" }));
+  assert.ok(k2.includes("_unknown_"), `应含 unknown: ${k2}`);
 });

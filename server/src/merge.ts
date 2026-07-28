@@ -1,3 +1,5 @@
+import { pinyin } from "pinyin-pro";
+
 /** 单个模型在一次会话里的用量明细(请求数 + 各类 token)。 */
 export interface ModelUsage {
   requests?: number;
@@ -215,10 +217,21 @@ export function mergeInto(state: MergeState, rec: StoredRecord): void {
   }
 }
 
-/** S3 key(spec §3):<prefix>events/dt=<received_at 的 UTC 日期>/<紧凑时间>_<event_id>_<tool>.json */
+/** 把姓名转成 S3 key 安全的拼音串(无空格、无中文、小写)。 */
+function toPinyin(name: string): string {
+  if (!name) return "unknown";
+  try {
+    return pinyin(name, { toneType: "none", type: "array" }).join("").replace(/[^a-z0-9]/g, "") || "unknown";
+  } catch {
+    return name.replace(/[^A-Za-z0-9_-]/g, "") || "unknown";
+  }
+}
+
+/** S3 key(spec §3):<prefix>events/dt=<received_at 的 UTC 日期>/<紧凑时间>_<event_id>_<who>_<tool>.json */
 export function eventKey(rec: StoredRecord, prefix = ""): string {
   const dt = rec.received_at.slice(0, 10);
   const compact = rec.received_at.replace(/[-:]/g, "");
   const tool = (rec.tool ?? "unknown").replace(/[^A-Za-z0-9-]/g, "-");
-  return `${prefix}events/dt=${dt}/${compact}_${rec.event_id}_${tool}.json`;
+  const who = toPinyin(rec.name || rec.email || rec.machine || "unknown");
+  return `${prefix}events/dt=${dt}/${compact}_${rec.event_id}_${who}_${tool}.json`;
 }

@@ -13,7 +13,8 @@
     "build:lambda": "rm -rf dist/lambda dist/vantage-lambda.zip && tsc -p tsconfig.lambda.json && cp lambda/package.lambda.json dist/lambda/package.json && npm install --prefix dist/lambda --omit=dev && cd dist/lambda && zip -rq ../vantage-lambda.zip ."
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1090.0"
+    "@aws-sdk/client-s3": "^3.1090.0",
+    "pinyin-pro": "^3.27.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
