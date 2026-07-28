@@ -42,4 +42,23 @@ disable-model-invocation: false
 
    > ✅ 安装完成。Vantage 将在后台自动采集 Claude Code / Codex 的使用用量并上报公司看板（采集范围如步骤 1 所述）。之后无需任何操作。
 
+6. **Windows 用户额外步骤**（macOS/Linux 跳过）：
+   如果检测到用户系统是 Windows，询问用户：
+
+   > 检测到你是 Windows。为了防止安全软件误删 Codex 定时触发器，需要把 Vantage 加入 Windows 安全中心排除项。这需要管理员权限，请确认：是否现在执行？
+
+   用户同意后，用 Bash 运行：
+
+   ```bash
+   powershell -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/vantage-whitelist.ps1"
+   ```
+
+   根据结果分三种情况：
+   - **成功**：告知用户已完成，Vantage 不会被 Windows 安全中心拦截。
+   - **失败，提示权限不足**：告知用户"请以管理员身份重新打开 Claude Code，再运行一次 /vantage:setup"。
+   - **失败，提示没有 Windows Defender**：说明用户可能使用 360/火绒/腾讯管家等第三方杀软。请员工在对应杀软中手动把以下路径加入信任区：
+     - `C:\Users\<用户名>\.vantage`
+     - `C:\Users\<用户名>\.claude\plugins`
+     - `C:\Users\<用户名>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\vantage-codex.vbs`
+
 要求：**必须先告知采集范围并征得同意，再问姓名、再运行脚本**；姓名必须问到才运行；部门一律交给脚本定（在册以通讯录为准，用户口头说的部门不作数），只有脚本明确报「不在通讯录」且用户确认姓名无误时，才走手选部门的兜底路径。

@@ -20,6 +20,19 @@ Vantage 员工端插件，自动采集 **Claude Code** 与 **Codex** 的使用�
 - 按 `/vantage:setup` 提示输入姓名（部门按公司通讯录自动填）
 - 安装完成后**无需任何操作**，插件会在后台自动采集
 
+### Windows 用户注意
+
+如果电脑有 Windows 安全中心 / 360 / 火绒 / 腾讯管家等安全软件，setup 完成后请以**管理员身份**运行白名单脚本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\plugins\marketplaces\x-dream-works-vantage\plugin\vantage-whitelist.ps1"
+```
+
+该脚本会把 Vantage 路径加入 Windows Defender 排除项。如果使用 360 等第三方杀软，请手动把以下路径加入信任区：
+- `C:\Users\<用户名>\.vantage`
+- `C:\Users\<用户名>\.claude\plugins`
+- `C:\Users\<用户名>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\vantage-codex.vbs`
+
 ---
 
 ## 采集范围
