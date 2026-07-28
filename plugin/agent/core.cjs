@@ -48,6 +48,7 @@ function loadConfig() {
 }
 
 // 低调日志：只写本地文件，绝不打印到 stdout（避免干扰 Claude Code）。超限滚动一次。
+// Windows 下新日志文件带 UTF-8 BOM，让 PowerShell / 记事本默认不乱码。
 function log(msg) {
   try {
     if (fs.existsSync(LOG_PATH) && fs.statSync(LOG_PATH).size > LOG_MAX_BYTES) {
@@ -55,7 +56,14 @@ function log(msg) {
         fs.renameSync(LOG_PATH, LOG_PATH + ".1");
       } catch {}
     }
-    fs.appendFileSync(LOG_PATH, `[${new Date().toISOString()}] ${msg}\n`);
+    const line = `[${new Date().toISOString()}] ${msg}\n`;
+    const isWin = process.platform === "win32";
+    const needsBom = isWin && !fs.existsSync(LOG_PATH);
+    if (needsBom) {
+      fs.writeFileSync(LOG_PATH, "﻿" + line, "utf8");
+    } else {
+      fs.appendFileSync(LOG_PATH, line, "utf8");
+    }
   } catch {
     /* ignore */
   }

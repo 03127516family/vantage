@@ -10,7 +10,7 @@ const core = require("./core.cjs");
 
 const AUTH_PATH = path.join(os.homedir(), ".codex", "auth.json");
 const ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
-const TIMEOUT_MS = 8000;
+const TIMEOUT_MS = 30000;
 
 function readAuth() {
   try {
