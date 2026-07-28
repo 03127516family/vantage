@@ -19,8 +19,8 @@ const RECENT_DAYS = Number(process.env.VANTAGE_RECENT_DAYS || 7);
 // 距上次成功的全量扫描不足 N 分钟就跳过本轮（只影响钩子路径；手动 sync、--only 定时任务、
 // setup 后的首次对账都不带 SessionStart 事件，不受节流）。
 const THROTTLE_MS = Number(process.env.VANTAGE_RECONCILE_INTERVAL_MIN || 30) * 60 * 1000;
-// Codex 账户额度（wham/usage）拉取节流：默认 1 小时。额度是 7 天窗、变化慢，没必要更频。
-const QUOTA_THROTTLE_MS = Number(process.env.VANTAGE_QUOTA_INTERVAL_MIN || 60) * 60 * 1000;
+// Codex 账户额度（wham/usage）拉取节流：与 Codex 扫描节流共用（scheduled/event），
+// 不再单独计时，避免"扫了 Codex 却不带 quota"。
 // Codex 定时触发节流：默认 30 分钟
 const CODEX_SCHEDULED_THROTTLE_MS = Number(process.env.VANTAGE_CODEX_SCHEDULED_INTERVAL_MIN || 30) * 60 * 1000;
 // Codex 事件触发节流：默认 5 分钟（仅 macOS WatchPaths 使用）
@@ -256,14 +256,17 @@ async function main() {
 
   // Codex 账户额度（wham/usage）：只在 Codex 专用扫描（--only codex，由 OS 定时器 detached 触发）时拉。
   // 不在全量 reconcile（Claude SessionStart）里拉——那会阻塞开会话最长 8s，且让 Claude 启动依赖
-  // OpenAI 接口可达性。1h 节流（节流的是“尝试”，失败也计数，避免狂打私有接口）。
+  // OpenAI 接口可达性。quota 节流与 Codex 扫描节流保持一致（默认 30 分钟），
+  // 避免出现"扫了 Codex 却不带 quota"的情况。
   // 结果贴到当轮所有 Codex 记录；失败→null→记录不带 quota，服务端粘性沿用。
   let codexQuota = null;
   if (args.only === "codex") {
     const qstate = core.readState();
-    const lastQ = Number(qstate.__last_quota_fetch__ || 0);
-    if (Date.now() - lastQ >= QUOTA_THROTTLE_MS) {
-      qstate.__last_quota_fetch__ = Date.now();
+    const throttleKey = `__last_codex_${args.trigger}__`;
+    const lastQ = Number(qstate[throttleKey] || 0);
+    const throttleMs = args.trigger === "event" ? CODEX_EVENT_THROTTLE_MS : CODEX_SCHEDULED_THROTTLE_MS;
+    if (Date.now() - lastQ >= throttleMs) {
+      qstate[throttleKey] = Date.now();
       core.writeState(qstate);
       codexQuota = await fetchCodexQuota();
       core.log(
@@ -272,7 +275,7 @@ async function main() {
           : "quota: fetch failed (null), records will carry no quota this run"
       );
     } else {
-      core.log(`quota: throttled (last ${Math.round((Date.now() - lastQ) / 60000)}min ago)`);
+      core.log(`quota: throttled (trigger=${args.trigger}, last ${Math.round((Date.now() - lastQ) / 60000)}min ago)`);
     }
   }
 
