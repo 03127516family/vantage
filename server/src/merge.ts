@@ -140,19 +140,39 @@ export function dayKeyLocal(ts: number): string {
 
 /**
  * 规范化额度字段（过渡期双向兼容用）。
- * 老采集器发 quota_primary_pct/secondary_pct/plan/reached（双窗模型），新采集器发 quota 对象（单 7 天窗）。
- * 给老记录补一个 quota 对象（权威），但**保留**老字段不删——让 S3 事件/老消费者/集成测试读老字段仍可用。
- * stats 以 quota 对象为准；输出时另反推老字段供看板（见 stats.ts）。幂等：已有 quota 直接返回。
+ * 支持三种输入：
+ * 1. 新采集器发完整 wham/usage 响应：{ plan_type, rate_limit: { primary_window: { used_percent } }, observed_at }
+ * 2. 新采集器发标准 quota 对象：{ plan_type, used_percent, limit_reached, observed_at }
+ * 3. 老采集器发扁平字段：quota_primary_pct/secondary_pct/plan/reached
+ *
+ * 统一归一化为标准 QuotaSnapshot 后写入 rec.quota；保留老字段不删。
+ * stats 以 quota 对象为准；输出时另反推老字段供看板。幂等。
  */
 export function normalizeQuota(rec: UsageRecord): void {
-  if (rec.quota) return;
+  // 1. 新采集器发完整 wham 响应：从 rate_limit.primary_window 提取
+  const rawQuota = rec.quota as any;
+  if (rawQuota && rawQuota.rate_limit?.primary_window?.used_percent != null) {
+    const pw = rawQuota.rate_limit.primary_window;
+    rec.quota = {
+      plan_type: rawQuota.plan_type ?? null,
+      used_percent: Number(pw.used_percent),
+      limit_reached: !!pw.limit_reached,
+      reset_at: pw.reset_at ? new Date(pw.reset_at * 1000).toISOString() : null,
+      observed_at: rawQuota.observed_at || rec.observed_at || rec.collected_at,
+    };
+    return;
+  }
+
+  // 2. 已有标准 quota 对象（含 used_percent）
+  if (rec.quota && typeof rec.quota.used_percent === "number") return;
+
+  // 3. 老采集器发 quota_primary_pct/secondary_pct/plan/reached
   const hasLegacy =
     rec.quota_primary_pct != null ||
     rec.quota_secondary_pct != null ||
     rec.quota_plan != null ||
     rec.quota_reached != null;
   if (!hasLegacy) return;
-  // 新模型只有 7 天窗：优先 secondary(7d)，回退 primary(老 5h)，保证至少有个数。
   const used =
     rec.quota_secondary_pct != null ? rec.quota_secondary_pct : rec.quota_primary_pct;
   rec.quota = {

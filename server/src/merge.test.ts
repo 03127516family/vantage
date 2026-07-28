@@ -67,6 +67,32 @@ test("normalizeQuota: 已是新形状/无额度 → 不动", () => {
   assert.equal(bare.quota, undefined); // 无额度字段，不加 quota
 });
 
+test("normalizeQuota: 完整 wham/usage 响应 → 提取 primary_window 为标准 quota", () => {
+  const raw: any = {
+    quota: {
+      plan_type: "plus",
+      rate_limit: {
+        allowed: true,
+        limit_reached: false,
+        primary_window: {
+          used_percent: 14,
+          limit_window_seconds: 604800,
+          reset_after_seconds: 517450,
+          reset_at: 1785716826,
+        },
+        secondary_window: null,
+      },
+      observed_at: "2026-07-27T10:00:00.000Z",
+    },
+  };
+  normalizeQuota(raw);
+  assert.equal(raw.quota.used_percent, 14);
+  assert.equal(raw.quota.plan_type, "plus");
+  assert.equal(raw.quota.limit_reached, false);
+  assert.equal(raw.quota.reset_at, new Date(1785716826 * 1000).toISOString());
+  assert.equal(raw.quota.observed_at, "2026-07-27T10:00:00.000Z");
+});
+
 test("eventKey: <prefix>events/dt=<received_at 日期>/<紧凑时间>_<event_id>_<tool>.json", () => {
   const k = eventKey(rec({ event_id: "01J", received_at: "2026-07-20T10:00:15.123Z" }), "vantage-prod/");
   assert.equal(k, "vantage-prod/events/dt=2026-07-20/20260720T100015.123Z_01J_codex.json");
