@@ -268,7 +268,7 @@ async function main() {
       codexQuota = await fetchCodexQuota();
       core.log(
         codexQuota
-          ? `quota: fetched plan=${codexQuota.plan_type} primary=${codexQuota.primary?.used_percent ?? "-"}% secondary=${codexQuota.secondary?.used_percent ?? "-"}%`
+          ? `quota: fetched plan=${codexQuota.plan_type} used=${codexQuota.rate_limit?.primary_window?.used_percent ?? "-"}%`
           : "quota: fetch failed (null), records will carry no quota this run"
       );
     } else {
