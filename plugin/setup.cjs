@@ -164,6 +164,7 @@ if (process.env.VANTAGE_SKIP_TRIGGER !== "1" && process.env.VANTAGE_TRIGGER_DRYR
     const child = spawn(process.execPath, [path.join(AGENT_DST, "reconcile.cjs")], {
       detached: true,
       stdio: "ignore",
+      windowsHide: true,
     });
     child.unref();
     console.log("✓ 已触发首次对账（后台用新身份补采历史会话）");

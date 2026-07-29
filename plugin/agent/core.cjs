@@ -15,6 +15,8 @@ const DEAD_DIR = path.join(BASE_DIR, "dead"); // 死信：永久失败/超龄，
 const STATE_PATH = path.join(BASE_DIR, "state.json");
 const LOG_PATH = path.join(BASE_DIR, "agent.log");
 const LOG_MAX_BYTES = 1024 * 1024; // 1MB 触发滚动
+// 字节序标记。不用 "﻿" 字面量:源码里的隐形字符易被编辑器/格式化工具剥掉。
+const BOM = String.fromCharCode(0xfeff);
 
 function ensureDirs() {
   fs.mkdirSync(SPOOL_DIR, { recursive: true });
@@ -60,7 +62,7 @@ function log(msg) {
     const isWin = process.platform === "win32";
     const needsBom = isWin && !fs.existsSync(LOG_PATH);
     if (needsBom) {
-      fs.writeFileSync(LOG_PATH, "﻿" + line, "utf8");
+      fs.writeFileSync(LOG_PATH, BOM + line, "utf8");
     } else {
       fs.appendFileSync(LOG_PATH, line, "utf8");
     }
@@ -172,9 +174,13 @@ function postJson(cfg, body, timeoutMs = 8000) {
     );
     req.on("timeout", () => {
       req.destroy();
+      log(`postJson: timeout ${u.host}`);
       resolve(0);
     });
-    req.on("error", () => resolve(0));
+    req.on("error", (e) => {
+      log(`postJson: ${u.host} ${e && e.code ? e.code : ""} ${e && e.message ? e.message : e}`);
+      resolve(0);
+    });
     req.write(data);
     req.end();
   });
@@ -199,7 +205,8 @@ function readStdin(timeoutMs = 1500) {
   });
 }
 
-/** 分离式启动另一个 Node 脚本（绝对路径或相对 __dirname）。不等待、不阻塞。 */
+/** 分离式启动另一个 Node 脚本（绝对路径或相对 __dirname）。不等待、不阻塞。
+ *  windowsHide: 父进程无控制台时(如 Windows 桌面端钩子)子进程也不会闪黑窗。 */
 function spawnDetached(scriptNameOrPath) {
   try {
     const scriptPath = path.isAbsolute(scriptNameOrPath)
@@ -208,6 +215,7 @@ function spawnDetached(scriptNameOrPath) {
     const child = spawn(process.execPath, [scriptPath], {
       detached: true,
       stdio: "ignore",
+      windowsHide: true,
     });
     child.unref();
   } catch {
@@ -224,6 +232,7 @@ function spawnShellDetached(command) {
     const child = spawn(shell, [arg, command], {
       detached: true,
       stdio: "ignore",
+      windowsHide: true,
     });
     child.unref();
   } catch {

@@ -21,7 +21,7 @@ function rm(p) {
 
 function run(cmd, argv, dryLabel) {
   if (DRYRUN) { console.log(`[dryrun] ${dryLabel}`); return; }
-  try { execFileSync(cmd, argv, { stdio: "ignore" }); } catch { /* 不存在/未加载,幂等忽略 */ }
+  try { execFileSync(cmd, argv, { stdio: "ignore", windowsHide: true }); } catch { /* 不存在/未加载,幂等忽略 */ }
 }
 
 // --- 三平台触发器卸载(对应 setup/trigger 装的) ---
@@ -74,8 +74,8 @@ function writeDetachedUninstallScript() {
   const scriptPath = path.join(tmpDir, `.vantage-uninstall-${process.pid}.js`);
   const script = `const { execFileSync } = require("node:child_process");
 setTimeout(() => {
-  try { execFileSync("claude", ["plugin", "uninstall", "vantage@dgcrane"], { stdio: "ignore" }); } catch {}
-  try { execFileSync("claude", ["plugin", "marketplace", "remove", "dgcrane"], { stdio: "ignore" }); } catch {}
+  try { execFileSync("claude", ["plugin", "uninstall", "vantage@dgcrane"], { stdio: "ignore", windowsHide: true }); } catch {}
+  try { execFileSync("claude", ["plugin", "marketplace", "remove", "dgcrane"], { stdio: "ignore", windowsHide: true }); } catch {}
 }, 2000);
 `;
   fs.writeFileSync(scriptPath, script);

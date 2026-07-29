@@ -22,12 +22,17 @@ function ensureMacosCodexTrigger({ log = () => {} } = {}) {
   const scheduledPlist = path.join(dir, `${labelBase}.scheduled.plist`);
   const watchPlist = path.join(dir, `${labelBase}.watch.plist`);
 
-  // 简单校验：新形态存在且参数正确
+  // 简单校验：新形态存在且参数正确。
+  // 注意 plist 里参数是独立 <string> 元素("<string>--trigger</string><string>scheduled</string>"),
+  // 不是 "--trigger scheduled" 连写——按连写校验会永远失败、每次 reconcile 都重装两个 job。
   if (fs.existsSync(scheduledPlist) && fs.existsSync(watchPlist)) {
     try {
       const s = fs.readFileSync(scheduledPlist, "utf8");
       const w = fs.readFileSync(watchPlist, "utf8");
-      if (s.includes("--trigger scheduled") && w.includes("--trigger event")) return;
+      if (
+        s.includes("--trigger") && s.includes("<string>scheduled</string>") &&
+        w.includes("--trigger") && w.includes("<string>event</string>")
+      ) return;
     } catch {
       /* 读失败继续修复 */
     }
