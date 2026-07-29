@@ -196,6 +196,7 @@ function installWindowsCodexTrigger({ log = () => {} } = {}) {
     <StartWhenAvailable>true</StartWhenAvailable>
     <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
     <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd></IdleSettings>
+    <Hidden>true</Hidden>
   </Settings>
   <Actions Context="Author">
     <Exec>
@@ -219,7 +220,7 @@ function installWindowsCodexTrigger({ log = () => {} } = {}) {
         const exported = schtasks(["/Query", "/TN", TASK_NAME, "/XML"]);
         const patched = exported.replace(
           "<Settings>",
-          "<Settings>\n    <StartWhenAvailable>true</StartWhenAvailable>"
+          "<Settings>\n    <StartWhenAvailable>true</StartWhenAvailable>\n    <Hidden>true</Hidden>"
         );
         fs.writeFileSync(xmlPath, Buffer.from(`﻿${patched}`, "utf16le"));
         schtasks(["/Delete", "/TN", TASK_NAME, "/F"]);
