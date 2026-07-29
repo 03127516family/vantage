@@ -240,6 +240,35 @@ function spawnShellDetached(command) {
   }
 }
 
+/** 彻底无窗地跑一段 shell 命令串，stdout/stderr 追加到 agent.log。
+ *  Windows 改走 wscript:Node detached 子进程会新建控制台窗口,windowsHide 的
+ *  SW_HIDE 在 "Windows Terminal 设为默认终端" 的机器上可能不被尊重,员工仍看到黑窗。
+ *  wscript 是 GUI 子系统进程,自身从不创建控制台(与 Codex 触发器同一条已在员工
+ *  机器上验证无窗的路径),窗口样式 0 双保险。非 Windows 维持 shell 后台执行。 */
+function spawnShellHidden(command) {
+  if (process.platform !== "win32") {
+    spawnShellDetached(`(${command}) >>${JSON.stringify(LOG_PATH)} 2>&1`);
+    return;
+  }
+  try {
+    // VBS 字符串内 `"` 写成 `""`,整行引号必须配平(同 installers.vbsBody 的教训)。
+    // cmd /c 后故意不加外层引号,避开 cmd /c 的剥引号规则;(...) 成组让整条 && 链都进日志。
+    const vbs =
+      "On Error Resume Next\r\n" +
+      `CreateObject("WScript.Shell").Run "cmd /c (${command.replace(/"/g, '""')}) >>""${LOG_PATH}"" 2>&1", 0, False\r\n`;
+    const vbsPath = path.join(BASE_DIR, "vantage-self-update.vbs");
+    writeFileAtomic(vbsPath, Buffer.from(BOM + vbs, "utf16le"));
+    const child = spawn("wscript.exe", [vbsPath], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+  } catch {
+    /* ignore */
+  }
+}
+
 module.exports = {
   BASE_DIR,
   CONFIG_PATH,
@@ -263,4 +292,5 @@ module.exports = {
   readStdin,
   spawnDetached,
   spawnShellDetached,
+  spawnShellHidden,
 };

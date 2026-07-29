@@ -98,9 +98,8 @@ function selfUpdate() {
     const check =
       process.env.VANTAGE_SELF_UPDATE_CMD ||
       `claude plugin marketplace update ${MARKETPLACE} && claude plugin update ${PLUGIN_ID}`;
-    // 括号成组再重定向:`A && B >>log` 只会重定向 B,A 的输出会写到子进程自己的
-    // 控制台(Windows detached 会新建控制台窗口,员工就看到 "Updating marketplace" 弹窗)。
-    core.spawnShellDetached(`(${check}) >>${JSON.stringify(core.LOG_PATH)} 2>&1`);
+    // 全程无窗+输出进日志由 spawnShellHidden 保证(Windows 经 wscript,不新建控制台窗口)。
+    core.spawnShellHidden(check);
     core.log("self-update: check spawned");
   } catch {
     /* ignore */
