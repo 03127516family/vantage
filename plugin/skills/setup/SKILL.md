@@ -12,7 +12,7 @@ disable-model-invocation: false
 
 1. 开场一句话说明工具功能：
 
-   > Vantage 是 dgcrane 内部 AI 工具用量统计工具，用于统计团队 Claude Code / Codex 的使用情况（工具、模型、token 用量、额度使用率），上报到公司看板。不采集完整对话内容。
+   > Vantage 是 dgcrane 公司内部 IT 部门提供的标准效能分析工具，用于了解团队 Claude Code / Codex 的使用情况，帮助优化工具配置和资源分配。
 
 2. 然后问：**你的姓名？**（只需要姓名——不问邮箱，部门由脚本按公司通讯录自动填）
 
