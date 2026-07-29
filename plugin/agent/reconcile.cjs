@@ -254,17 +254,21 @@ async function main() {
   // 若被 --only 单源扫描按安装闸口剪掉，后续身份变更就无从知道它该重传。
   core.pruneState(recentCutoff);
 
-  // Codex 账户额度（wham/usage）：只在 Codex 专用扫描（--only codex，由 OS 定时器 detached 触发）时拉。
-  // 不在全量 reconcile（Claude SessionStart）里拉——那会阻塞开会话最长 8s，且让 Claude 启动依赖
-  // OpenAI 接口可达性。quota 节流与 Codex 扫描节流保持一致（默认 30 分钟），
-  // 避免出现"扫了 Codex 却不带 quota"的情况。
+  // Codex 账户额度（wham/usage）：Codex 专用扫描（--only codex）和全量 reconcile（含 codex 源）都拉。
+  // 专用扫描与定时任务同节流（30min/5min）；全量 reconcile 单独 30min 节流，避免每次开会话都调 wham。
   // 结果贴到当轮所有 Codex 记录；失败→null→记录不带 quota，服务端粘性沿用。
   let codexQuota = null;
-  if (args.only === "codex") {
+  const needCodexQuota = args.only === "codex" || sources.some((s) => s.tool === "codex");
+  if (needCodexQuota) {
     const qstate = core.readState();
-    const throttleKey = `__last_codex_${args.trigger}__`;
+    const isFullScan = args.only !== "codex";
+    const throttleKey = isFullScan ? "__last_quota_fetch_full__" : `__last_codex_${args.trigger}__`;
+    const throttleMs = isFullScan
+      ? CODEX_SCHEDULED_THROTTLE_MS
+      : args.trigger === "event"
+        ? CODEX_EVENT_THROTTLE_MS
+        : CODEX_SCHEDULED_THROTTLE_MS;
     const lastQ = Number(qstate[throttleKey] || 0);
-    const throttleMs = args.trigger === "event" ? CODEX_EVENT_THROTTLE_MS : CODEX_SCHEDULED_THROTTLE_MS;
     if (Date.now() - lastQ >= throttleMs) {
       qstate[throttleKey] = Date.now();
       core.writeState(qstate);
@@ -275,7 +279,7 @@ async function main() {
           : "quota: fetch failed (null), records will carry no quota this run"
       );
     } else {
-      core.log(`quota: throttled (trigger=${args.trigger}, last ${Math.round((Date.now() - lastQ) / 60000)}min ago)`);
+      core.log(`quota: throttled (${isFullScan ? "full" : args.trigger}, last ${Math.round((Date.now() - lastQ) / 60000)}min ago)`);
     }
   }
 
