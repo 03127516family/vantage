@@ -5,8 +5,8 @@
 //       而不是只在开发机上做静态推断。只做验证 + 一次真实的 marketplace 刷新,不删任何东西。
 // 用法:员工在终端(PowerShell / Windows Terminal / cmd)里运行:
 //   node win-verify.cjs
-// (文件可由管理员从微信发来放到任意目录;插件升到 1.4.12 后缓存里也自带:
-//   %USERPROFILE%\.claude\plugins\cache\dgcrane\vantage\1.4.12\win-verify.cjs)
+// (文件可由管理员从微信发来放到任意目录;插件升到 1.4.13 后缓存里也自带:
+//   %USERPROFILE%\.claude\plugins\cache\dgcrane\vantage\1.4.13\win-verify.cjs)
 // 跑完把全部输出复制/截图发回管理员。
 const fs = require("node:fs");
 const os = require("node:os");
