@@ -95,9 +95,15 @@ function selfUpdate() {
     if (Date.now() - last < SELF_UPDATE_INTERVAL_MS) return;
     state.__last_self_update__ = Date.now();
     core.writeState(state);
+    // marketplace 是 SSH 克隆的私有仓库:无人值守时 ssh 可能卡在密码/host key 提示上
+    // (员工机器症状:黑窗一直挂着、版本永远拉不下来、plugin update 对比旧缓存误报"已是最新")。
+    // BatchMode 禁交互提示、ConnectTimeout 快速失败,失败原因随重定向落进 agent.log 可查。
+    const sshGuard = "ssh -o BatchMode=yes -o ConnectTimeout=10";
     const check =
       process.env.VANTAGE_SELF_UPDATE_CMD ||
-      `claude plugin marketplace update ${MARKETPLACE} && claude plugin update ${PLUGIN_ID}`;
+      (process.platform === "win32"
+        ? `set "GIT_SSH_COMMAND=${sshGuard}" && claude plugin marketplace update ${MARKETPLACE} && claude plugin update ${PLUGIN_ID}`
+        : `export GIT_SSH_COMMAND="${sshGuard}"; claude plugin marketplace update ${MARKETPLACE} && claude plugin update ${PLUGIN_ID}`);
     // 全程无窗+输出进日志由 spawnShellHidden 保证(Windows 经 wscript,不新建控制台窗口)。
     core.spawnShellHidden(check);
     core.log("self-update: check spawned");
