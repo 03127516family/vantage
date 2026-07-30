@@ -240,6 +240,27 @@ function spawnShellDetached(command) {
   }
 }
 
+/** 自更新命令串(纯函数,便于单测)。
+ *  marketplace 是 SSH 克隆的私有仓库:无人值守时 ssh 可能卡在密码/host key 提示上
+ *  (员工机器症状:更新窗口一直挂着、版本永远拉不下来、plugin update 对比旧缓存误报"已是最新")。
+ *  BatchMode 禁交互提示、ConnectTimeout 快速失败,失败原因随重定向落进 agent.log 可查。 */
+function buildSelfUpdateCmd(marketplace, pluginId, platform = process.platform) {
+  const sshGuard = "ssh -o BatchMode=yes -o ConnectTimeout=10";
+  return platform === "win32"
+    ? `set "GIT_SSH_COMMAND=${sshGuard}" && claude plugin marketplace update ${marketplace} && claude plugin update ${pluginId}`
+    : `export GIT_SSH_COMMAND="${sshGuard}"; claude plugin marketplace update ${marketplace} && claude plugin update ${pluginId}`;
+}
+
+/** wscript 隐藏运行的 VBS 内容(纯函数,便于单测)。
+ *  VBS 字符串内 `"` 写成 `""`,整行引号必须配平(同 installers.vbsBody 的教训);
+ *  cmd /c 后故意不加外层引号,避开 cmd /c 的剥引号规则;(...) 成组让整条 && 链都进日志。 */
+function hiddenRunVbs(command, logPath = LOG_PATH) {
+  return (
+    "On Error Resume Next\r\n" +
+    `CreateObject("WScript.Shell").Run "cmd /c (${command.replace(/"/g, '""')}) >>""${logPath}"" 2>&1", 0, False\r\n`
+  );
+}
+
 /** 彻底无窗地跑一段 shell 命令串，stdout/stderr 追加到 agent.log。
  *  Windows 改走 wscript:Node detached 子进程会新建控制台窗口,windowsHide 的
  *  SW_HIDE 在 "Windows Terminal 设为默认终端" 的机器上可能不被尊重,员工仍看到黑窗。
@@ -251,13 +272,8 @@ function spawnShellHidden(command) {
     return;
   }
   try {
-    // VBS 字符串内 `"` 写成 `""`,整行引号必须配平(同 installers.vbsBody 的教训)。
-    // cmd /c 后故意不加外层引号,避开 cmd /c 的剥引号规则;(...) 成组让整条 && 链都进日志。
-    const vbs =
-      "On Error Resume Next\r\n" +
-      `CreateObject("WScript.Shell").Run "cmd /c (${command.replace(/"/g, '""')}) >>""${LOG_PATH}"" 2>&1", 0, False\r\n`;
     const vbsPath = path.join(BASE_DIR, "vantage-self-update.vbs");
-    writeFileAtomic(vbsPath, Buffer.from(BOM + vbs, "utf16le"));
+    writeFileAtomic(vbsPath, Buffer.from(BOM + hiddenRunVbs(command), "utf16le"));
     const child = spawn("wscript.exe", [vbsPath], {
       detached: true,
       stdio: "ignore",
@@ -293,4 +309,6 @@ module.exports = {
   spawnDetached,
   spawnShellDetached,
   spawnShellHidden,
+  buildSelfUpdateCmd,
+  hiddenRunVbs,
 };
