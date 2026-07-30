@@ -224,6 +224,45 @@ function hourlyTaskXml(runVbs) {
 </Task>`;
 }
 
+// Windows 对同一个“每小时”任务有两种合法 XML 表达：
+// 手写 XML 使用 ScheduleByHour/HoursInterval=1；schtasks /SC HOURLY 导出时则使用
+// Repetition/Interval=PT1H。校验必须同时接受两者，否则回退创建的任务每次运行都会被
+// 自检误删重建，Task Scheduler 的 LastRunTime/LastResult 也会随之重置。
+function hasXmlElement(xml, name, valuePattern) {
+  const tag = `(?:[A-Za-z_][\\w.-]*:)?${name}`;
+  return new RegExp(
+    `<${tag}\\b[^>]*>\\s*${valuePattern}\\s*</${tag}\\s*>`,
+    "i"
+  ).test(xml);
+}
+
+function isValidHourlyTaskXml(xml, runVbs) {
+  const text = String(xml || "");
+  const tagPrefix = "(?:[A-Za-z_][\\w.-]*:)?";
+  const scheduleByHour = new RegExp(
+    `<${tagPrefix}ScheduleByHour\\b[\\s\\S]*?` +
+      `<${tagPrefix}HoursInterval\\b[^>]*>\\s*1\\s*</${tagPrefix}HoursInterval\\s*>` +
+      `[\\s\\S]*?</${tagPrefix}ScheduleByHour\\s*>`,
+    "i"
+  ).test(text);
+  const repetition = new RegExp(
+    `<${tagPrefix}Repetition\\b[\\s\\S]*?` +
+      `<${tagPrefix}Interval\\b[^>]*>\\s*PT1H\\s*</${tagPrefix}Interval\\s*>` +
+      `[\\s\\S]*?</${tagPrefix}Repetition\\s*>`,
+    "i"
+  ).test(text);
+  const startWhenAvailable = hasXmlElement(text, "StartWhenAvailable", "true");
+  const wscript = hasXmlElement(text, "Command", "(?:[^<]*\\\\)?wscript(?:\\.exe)?");
+  const expectedVbs = String(runVbs || "").toLowerCase();
+  return (
+    (scheduleByHour || repetition) &&
+    startWhenAvailable &&
+    wscript &&
+    expectedVbs.length > 0 &&
+    text.toLowerCase().includes(expectedVbs)
+  );
+}
+
 // Windows: 登录自启(启动文件夹 VBS) + 每小时计划任务(StartWhenAvailable 错过补跑)
 function installWindowsCodexTrigger({ log = () => {} } = {}) {
   if (process.platform !== "win32" || process.env.VANTAGE_SKIP_TRIGGER === "1") return;
@@ -250,8 +289,8 @@ function installWindowsCodexTrigger({ log = () => {} } = {}) {
   let needsCreate = false;
   try {
     const info = schtasks(["/Query", "/TN", TASK_NAME, "/XML"]);
-    // 如果任务已存在但内容不是 hourly + StartWhenAvailable，删除重建
-    if (!info.includes("<ScheduleByHour>") || !info.includes("<StartWhenAvailable>true</StartWhenAvailable>")) {
+    // 如果任务已存在但内容不是每小时 + 错过补跑 + 正确执行体，删除重建。
+    if (!isValidHourlyTaskXml(info, runVbs)) {
       schtasks(["/Delete", "/TN", TASK_NAME, "/F"]);
       needsCreate = true;
     }
@@ -309,4 +348,5 @@ module.exports = {
   writeVbsIfChanged,
   decodeConsoleOutput,
   hourlyTaskXml,
+  isValidHourlyTaskXml,
 };
