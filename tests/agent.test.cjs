@@ -723,6 +723,24 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
           /spawnNodeHidden/.test(reconcileUpdateSource),
         "reconcile 使用同一更新锁、哈希同步和隐藏稳定更新器"
       );
+
+      const verifySource = fs.readFileSync(path.join(ROOT, "win-verify.cjs"), "utf8");
+      ok(
+        /plugin[",\s]+update/.test(verifySource) ||
+          /plugin update/.test(verifySource),
+        "Windows 实机验证真实执行 plugin update"
+      );
+      ok(
+        verifySource.includes("installed_plugins.json") &&
+          verifySource.includes("resolveInstalledPlugin"),
+        "Windows 实机验证更新后重新读取生效安装记录"
+      );
+      ok(
+        verifySource.includes("treeDigest") &&
+          verifySource.includes("activateInstalledAgent"),
+        "Windows 实机验证完整哈希和生产激活逻辑"
+      );
+      ok(/schtasks/.test(verifySource), "Windows 实机验证真实运行并查询计划任务");
     }
   }
 
