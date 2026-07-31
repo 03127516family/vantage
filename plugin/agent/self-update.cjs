@@ -189,6 +189,18 @@ function releaseUpdateLock(lock) {
   } catch {}
 }
 
+function shouldCheckForUpdate(options = {}) {
+  const elapsedMs = Number(options.elapsedMs ?? 0);
+  const pluginIntervalMs = Number(options.pluginIntervalMs ?? 2 * 3600 * 1000);
+  const scheduledIntervalMs = Number(options.scheduledIntervalMs ?? 24 * 3600 * 1000);
+  if (options.source === "plugin") return elapsedMs >= pluginIntervalMs;
+  return (
+    options.source === "stable" &&
+    options.trigger === "scheduled" &&
+    elapsedMs >= scheduledIntervalMs
+  );
+}
+
 function cliInvocation(args, platform = process.platform) {
   if (platform === "win32") {
     return {
@@ -254,8 +266,8 @@ function runOfficialUpdate(options = {}) {
 /** 完整闭环：官方更新成功后，激活生效缓存并使用新代码修复触发器。 */
 function runUpdateAndActivate(options = {}) {
   const home = options.home || os.homedir();
-  const pluginId = options.pluginId || "vantage@dgcrane";
-  const marketplace = options.marketplace || pluginId.split("@")[1] || "dgcrane";
+  const marketplace = options.marketplace || process.env.VANTAGE_MARKETPLACE || "dgcrane";
+  const pluginId = options.pluginId || `vantage@${marketplace}`;
   const writeLog = options.log || require("./core.cjs").log;
   const update = options.runOfficialUpdate || runOfficialUpdate;
   const activate = options.activateInstalledAgent || activateInstalledAgent;
@@ -312,6 +324,7 @@ module.exports = {
   activateInstalledAgent,
   acquireUpdateLock,
   releaseUpdateLock,
+  shouldCheckForUpdate,
   runOfficialUpdate,
   runUpdateAndActivate,
 };

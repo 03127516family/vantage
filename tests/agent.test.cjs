@@ -673,6 +673,56 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
         ok(closedLoop.ok === true, "完整更新闭环成功");
         ok(phases.join(",") === "update,activate,repair", "严格按更新、激活、修复顺序执行");
       }
+
+      if (typeof updater.shouldCheckForUpdate !== "function") {
+        ok(false, "双触发更新节流函数已实现");
+      } else {
+        ok(
+          updater.shouldCheckForUpdate({
+            source: "plugin",
+            elapsedMs: 2 * 3600 * 1000,
+          }),
+          "Claude 插件路径每两小时检查"
+        );
+        ok(
+          !updater.shouldCheckForUpdate({
+            source: "plugin",
+            elapsedMs: 90 * 60 * 1000,
+          }),
+          "Claude 插件路径两小时内不重复检查"
+        );
+        ok(
+          updater.shouldCheckForUpdate({
+            source: "stable",
+            trigger: "scheduled",
+            elapsedMs: 24 * 3600 * 1000,
+          }),
+          "稳定计划任务每 24 小时兜底"
+        );
+        ok(
+          !updater.shouldCheckForUpdate({
+            source: "stable",
+            trigger: "event",
+            elapsedMs: 48 * 3600 * 1000,
+          }),
+          "文件事件触发不检查更新"
+        );
+        ok(
+          updater.shouldCheckForUpdate({
+            source: "plugin",
+            elapsedMs: 0,
+            pluginIntervalMs: 0,
+          }),
+          "测试或运维可用 0 强制立即检查"
+        );
+      }
+      const reconcileUpdateSource = fs.readFileSync(path.join(AGENT, "reconcile.cjs"), "utf8");
+      ok(
+        /acquireUpdateLock/.test(reconcileUpdateSource) &&
+          /activateAgentTree/.test(reconcileUpdateSource) &&
+          /spawnNodeHidden/.test(reconcileUpdateSource),
+        "reconcile 使用同一更新锁、哈希同步和隐藏稳定更新器"
+      );
     }
   }
 

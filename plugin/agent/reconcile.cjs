@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const core = require("./core.cjs");
+const updater = require("./self-update.cjs");
 const { parseClaudeTranscript } = require("./parsers/claude-code.cjs");
 const { parseCodexRollout } = require("./parsers/codex.cjs");
 const { fetchCodexQuota } = require("./quota.cjs");
@@ -31,10 +32,9 @@ const RETENTION_DAYS = Number(process.env.VANTAGE_RETENTION_DAYS || 14);
 // 默认 2h 一次（每次检查只是后台一次 git fetch,成本可忽略;收紧是为让修复当天下达员工)。
 // 版本串未 bump 则官方判定"已是最新"、空跑一次无妨;有新版则落盘、下次会话生效。
 const SELF_UPDATE_INTERVAL_MS = Number(process.env.VANTAGE_SELF_UPDATE_INTERVAL_H || 2) * 3600 * 1000;
-// marketplace 名 / 插件 ID（与 .claude-plugin/marketplace.json 一致）
-const MARKETPLACE = process.env.VANTAGE_MARKETPLACE || "dgcrane";
-const PLUGIN_ID = `vantage@${MARKETPLACE}`;
-
+// 用户长时间不打开 Claude 时，由现有计划任务每天静默兜底一次。
+const SELF_UPDATE_SCHEDULED_INTERVAL_MS =
+  Number(process.env.VANTAGE_SELF_UPDATE_SCHEDULED_INTERVAL_H || 24) * 3600 * 1000;
 // 要扫描的数据源：目录 + 解析器 + 工具名
 const SOURCES = [
   {
@@ -64,44 +64,45 @@ function realPath(p) {
 function syncStableCopy() {
   const dst = path.join(os.homedir(), ".vantage", "agent");
   if (realPath(__dirname) === realPath(dst)) return; // 本就是稳定副本，无需同步
+  const lock = updater.acquireUpdateLock(os.homedir());
+  if (!lock) return; // 后台更新器正在替换稳定副本，本次会话不争抢。
   try {
-    // 仅当稳定副本缺失或比插件版旧时才复制，避免每次 SessionStart 无谓 I/O。
-    const srcMtime = fs.statSync(path.join(__dirname, "core.cjs")).mtimeMs;
-    let dstMtime = -1;
-    try {
-      dstMtime = fs.statSync(path.join(dst, "core.cjs")).mtimeMs;
-    } catch {
-      /* 缺失 */
-    }
-    if (dstMtime >= srcMtime) return;
-    fs.mkdirSync(dst, { recursive: true });
-    fs.cpSync(__dirname, dst, { recursive: true });
-  } catch {
-    /* ignore */
+    const result = updater.activateAgentTree(__dirname, dst);
+    if (result.changed) core.log(`self-update: stable agent synced digest=${result.digest}`);
+  } catch (e) {
+    core.log(`self-update: stable sync failed ${String(e.message || e)}`);
+  } finally {
+    updater.releaseUpdateLock(lock);
   }
 }
 
-// 插件自更新：后台静默跑官方 CLI 刷新 marketplace 并更新 cache 里的插件，新版本下次会话生效
-// （CLAUDE_PLUGIN_ROOT 在会话启动时已固定，本会话拿不到新版）。官方版本串对比：plugin.json 的
-// version 未 bump 则"已是最新"跳过。先盖章再派生，并发会话不重复检查；失败咽下，绝不影响采集。
-// 只在插件目录运行时做（Claude 钩子路径）；~/.vantage/agent 稳定副本（Codex 触发器）不管这事。
-function selfUpdate() {
+// 插件路径每 2h 检查；稳定计划任务每 24h 兜底。这里只静默派生稳定更新器，
+// 不等待网络、下载或同步完成，因此不会拖慢 Claude 启动和正常采集。
+function selfUpdate(args) {
   if (process.env.VANTAGE_DISABLE_SELF_UPDATE) return; // 测试/运维逃生开关
   const stableCopy = path.join(os.homedir(), ".vantage", "agent");
-  if (realPath(__dirname) === realPath(stableCopy)) return;
   try {
+    const source = realPath(__dirname) === realPath(stableCopy) ? "stable" : "plugin";
     const state = core.readState();
     const last = Number(state.__last_self_update__ || 0);
-    if (Date.now() - last < SELF_UPDATE_INTERVAL_MS) return;
+    const due = updater.shouldCheckForUpdate({
+      source,
+      trigger: args.trigger,
+      elapsedMs: Date.now() - last,
+      pluginIntervalMs: SELF_UPDATE_INTERVAL_MS,
+      scheduledIntervalMs: SELF_UPDATE_SCHEDULED_INTERVAL_MS,
+    });
+    if (!due) return;
     state.__last_self_update__ = Date.now();
     core.writeState(state);
-    // 命令串由 core.buildSelfUpdateCmd 生成(含 SSH BatchMode 守卫,防无人值守挂死);
-    // 全程无窗+输出进日志由 spawnShellHidden 保证(Windows 经 wscript,不新建控制台窗口)。
-    const check = process.env.VANTAGE_SELF_UPDATE_CMD || core.buildSelfUpdateCmd(MARKETPLACE, PLUGIN_ID);
-    core.spawnShellHidden(check);
-    core.log("self-update: check spawned");
-  } catch {
-    /* ignore */
+    const worker = path.join(stableCopy, "self-update.cjs");
+    if (!core.spawnNodeHidden(worker, ["--check"])) {
+      core.log(`self-update: spawn failed source=${source}`);
+      return;
+    }
+    core.log(`self-update: check spawned source=${source}`);
+  } catch (e) {
+    core.log(`self-update: trigger failed ${String(e.message || e)}`);
   }
 }
 
@@ -185,7 +186,7 @@ async function main() {
   }
 
   syncStableCopy(); // 从插件目录运行时，刷新 Codex 用的稳定副本（节流前做，插件更新及时生效）
-  selfUpdate(); // 同在节流前：24h 一次后台查插件更新，新版本下次会话生效
+  selfUpdate(args); // 同在节流前：Claude 两小时检查，计划任务每天兜底，后台无窗执行
   // Windows:Codex 触发器自检自愈——自更新只同步脚本文件,触发器(装没装/机制换没换)
   // 由这里顺带保证,员工永远不需要为触发器重跑 setup。非 win32 内部直接返回。
   try {
