@@ -88,6 +88,26 @@ function resolveInstalledPlugin(home = os.homedir(), pluginId = "vantage@dgcrane
   return { ...active, manifest, agentDir };
 }
 
+function cleanupActivationDebris(stableDir) {
+  const parent = path.dirname(stableDir);
+  const base = path.basename(stableDir);
+  let entries = [];
+  try {
+    entries = fs.readdirSync(parent);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (name.startsWith(`${base}.stage.`) || name.startsWith(`${base}.backup.`)) {
+      try {
+        fs.rmSync(path.join(parent, name), { recursive: true, force: true });
+      } catch {
+        // 杀软短暂占用时留给下一次成功激活继续清理。
+      }
+    }
+  }
+}
+
 /** 将完整 Agent 目录以 staging + backup 方式激活；失败时恢复旧目录。 */
 function activateAgentTree(sourceDir, stableDir, options = {}) {
   const source = path.resolve(sourceDir);
@@ -97,6 +117,7 @@ function activateAgentTree(sourceDir, stableDir, options = {}) {
     if (typeof options.afterActivate === "function") {
       options.afterActivate({ stable, backup: null, digest });
     }
+    cleanupActivationDebris(stable);
     return { changed: false, digest };
   }
   const sourceDigest = treeDigest(source);
@@ -110,6 +131,7 @@ function activateAgentTree(sourceDir, stableDir, options = {}) {
     if (typeof options.afterActivate === "function") {
       options.afterActivate({ stable, backup: null, digest: sourceDigest });
     }
+    cleanupActivationDebris(stable);
     return { changed: false, digest: sourceDigest };
   }
 
@@ -119,6 +141,7 @@ function activateAgentTree(sourceDir, stableDir, options = {}) {
   fs.rmSync(stage, { recursive: true, force: true });
   fs.rmSync(backup, { recursive: true, force: true });
   let movedOld = false;
+  let activatedNew = false;
   try {
     fs.cpSync(source, stage, { recursive: true, force: true });
     if (treeDigest(stage) !== sourceDigest) {
@@ -130,6 +153,7 @@ function activateAgentTree(sourceDir, stableDir, options = {}) {
       movedOld = true;
     }
     fs.renameSync(stage, stable);
+    activatedNew = true;
     if (treeDigest(stable) !== sourceDigest) {
       throw new Error("Agent 激活后哈希校验失败");
     }
@@ -137,12 +161,13 @@ function activateAgentTree(sourceDir, stableDir, options = {}) {
       options.afterActivate({ stable, backup, digest: sourceDigest });
     }
     fs.rmSync(backup, { recursive: true, force: true });
+    cleanupActivationDebris(stable);
     return { changed: true, digest: sourceDigest };
   } catch (e) {
     try {
       fs.rmSync(stage, { recursive: true, force: true });
+      if (activatedNew) fs.rmSync(stable, { recursive: true, force: true });
       if (movedOld) {
-        fs.rmSync(stable, { recursive: true, force: true });
         fs.renameSync(backup, stable);
       }
     } catch {

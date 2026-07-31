@@ -602,6 +602,32 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
       ok(/repair failed/.test(rollbackError), "激活后的任务修复失败会向上报告");
       ok(updater.treeDigest(rollbackStable) === rollbackBefore, "任务修复失败时恢复旧 Agent");
 
+      const emptyStable = path.join(home, ".vantage", "empty-agent");
+      let emptyRollbackError = "";
+      try {
+        updater.activateAgentTree(path.join(activeDir, "agent"), emptyStable, {
+          afterActivate() {
+            throw new Error("first repair failed");
+          },
+        });
+      } catch (e) {
+        emptyRollbackError = String(e.message || e);
+      }
+      ok(
+        /first repair failed/.test(emptyRollbackError) && !fs.existsSync(emptyStable),
+        "首次激活任务修复失败时不留下半激活 Agent"
+      );
+
+      const staleStage = `${stableDir}.stage.111`;
+      const staleBackup = `${stableDir}.backup.222`;
+      fs.mkdirSync(staleStage, { recursive: true });
+      fs.mkdirSync(staleBackup, { recursive: true });
+      updater.activateAgentTree(path.join(activeDir, "agent"), stableDir);
+      ok(
+        !fs.existsSync(staleStage) && !fs.existsSync(staleBackup),
+        "成功激活后清理崩溃残留的 staging 和 backup"
+      );
+
       let unchangedRepairCalls = 0;
       let unchangedRepairError = "";
       try {
