@@ -759,6 +759,36 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
         ok(phases.join(",") === "update,activate,repair", "严格按更新、激活、修复顺序执行");
       }
 
+      if (typeof updater.resolveUpdaterWorker !== "function") {
+        ok(false, "更新器回退函数已实现（稳定副本缺更新器时回退缓存）");
+      } else {
+        // 稳定副本此刻不含 self-update.cjs（由不含该文件的缓存激活而来），
+        // 模拟"落后到无感自更新功能之前"的真实故障机：每小时任务派生稳定副本更新器会失败、自愈死循环。
+        fs.writeFileSync(path.join(activeDir, "agent", "self-update.cjs"), "module.exports={};\n");
+        const fallbackWorker = updater.resolveUpdaterWorker({ home, stableDir });
+        ok(
+          fallbackWorker === path.join(activeDir, "agent", "self-update.cjs"),
+          "稳定副本缺 self-update.cjs 时回退到缓存更新器（打破自愈死循环）",
+          fallbackWorker
+        );
+
+        // 稳定副本自身就有更新器时必须沿用稳定副本——这是"插件被卸载后仍能自更新"的设计前提，不能总跑去缓存。
+        const selfHealed = path.join(home, ".vantage", "healed-agent");
+        fs.mkdirSync(selfHealed, { recursive: true });
+        fs.writeFileSync(path.join(selfHealed, "self-update.cjs"), "module.exports={};\n");
+        ok(
+          updater.resolveUpdaterWorker({ home, stableDir: selfHealed }) ===
+            path.join(selfHealed, "self-update.cjs"),
+          "稳定副本有 self-update.cjs 时沿用稳定副本（卸载后仍可自更新）"
+        );
+
+        // 既无稳定副本更新器、又无可用安装记录时返回 null，调用方静默跳过、绝不弹窗。
+        ok(
+          updater.resolveUpdaterWorker({ home: mkhome() }) === null,
+          "无任何可用更新器时返回 null（静默跳过）"
+        );
+      }
+
       if (typeof updater.shouldCheckForUpdate !== "function") {
         ok(false, "双触发更新节流函数已实现");
       } else {
@@ -807,6 +837,10 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
           /activateAgentTree/.test(reconcileUpdateSource) &&
           /spawnNodeHidden/.test(reconcileUpdateSource),
         "reconcile 使用同一更新锁、哈希同步和隐藏稳定更新器"
+      );
+      ok(
+        /resolveUpdaterWorker/.test(reconcileUpdateSource),
+        "reconcile 派生更新器时回退缓存（稳定副本缺更新器也能自愈，不再硬编码路径）"
       );
       const updaterSource = fs.readFileSync(path.join(AGENT, "self-update.cjs"), "utf8");
       const triggerSource = fs.readFileSync(path.join(AGENT, "trigger.cjs"), "utf8");
@@ -945,6 +979,42 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
         }
       }
     }
+  }
+
+  // ============================================================
+  section("12. quota 缓存兜底:拉取失败/节流时沿用上次值,每条记录都带");
+  {
+    const quota = require(path.join(AGENT, "quota.cjs"));
+    if (typeof quota.pickQuota !== "function") {
+      ok(false, "quota 缓存选择函数 pickQuota 已实现");
+    } else {
+      const now = 1_000_000;
+      const maxAge = 6 * 3600 * 1000;
+      const fresh = { plan_type: "plus", rate_limit: { primary_window: { used_percent: 10 } } };
+      const cached = {
+        value: { plan_type: "plus", rate_limit: { primary_window: { used_percent: 99 } } },
+        at: now - 60_000,
+      };
+      ok(quota.pickQuota(fresh, null, maxAge, now) === fresh, "本轮拉到新值时优先用新值");
+      ok(
+        quota.pickQuota(null, cached, maxAge, now) === cached.value,
+        "本轮没拉到时沿用缓存(网络抖/节流也不掉)"
+      );
+      ok(
+        quota.pickQuota(null, { value: fresh, at: now - maxAge }, maxAge, now) === fresh,
+        "缓存恰好未过保质期(<=maxAge)仍可用"
+      );
+      ok(
+        quota.pickQuota(null, { value: fresh, at: now - maxAge - 1 }, maxAge, now) === null,
+        "缓存过保质期则丢弃(不给记录贴太旧的值)"
+      );
+      ok(quota.pickQuota(null, null, maxAge, now) === null, "既无新值也无缓存时返回 null");
+    }
+    const reconcileSrc = fs.readFileSync(path.join(AGENT, "reconcile.cjs"), "utf8");
+    ok(
+      /pickQuota/.test(reconcileSrc) && /__quota_cache__/.test(reconcileSrc),
+      "reconcile 缓存上次成功 quota 并用 pickQuota 兜底(失败/节流时每条记录仍带 quota)"
+    );
   }
 
   // ============================================================

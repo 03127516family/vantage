@@ -84,4 +84,22 @@ function fetchCodexQuota() {
   });
 }
 
-module.exports = { fetchCodexQuota };
+/**
+ * 选择本轮真正贴到记录上的 quota：本轮拉到新值就用新值；
+ * 否则在保质期内沿用上次缓存的值（网络抖动/节流跳过时，记录照样带 quota）；
+ * 缓存过保质期或从无缓存时返回 null。纯函数，不产生任何子进程/窗口。
+ */
+function pickQuota(fetched, cached, maxAgeMs, now = Date.now()) {
+  if (fetched) return fetched;
+  if (
+    cached &&
+    cached.value &&
+    Number.isFinite(Number(cached.at)) &&
+    now - Number(cached.at) <= maxAgeMs
+  ) {
+    return cached.value;
+  }
+  return null;
+}
+
+module.exports = { fetchCodexQuota, pickQuota };

@@ -88,6 +88,28 @@ function resolveInstalledPlugin(home = os.homedir(), pluginId = "vantage@dgcrane
   return { ...active, manifest, agentDir };
 }
 
+/**
+ * 选择实际派生的自更新器路径。
+ * 优先稳定副本(插件被卸载后仍能自更新)；但稳定副本缺少 self-update.cjs
+ * (落后到无感自更新功能之前的故障机)时，回退到缓存里的更新器——
+ * 否则每小时任务派生稳定副本更新器必然失败，自愈陷入死循环。
+ * 全程纯 fs 读取，不产生任何子进程/窗口。无可用更新器时返回 null。
+ */
+function resolveUpdaterWorker(options = {}) {
+  const home = options.home || os.homedir();
+  const stableDir = options.stableDir || path.join(home, ".vantage", "agent");
+  const stableWorker = path.join(stableDir, "self-update.cjs");
+  if (fs.existsSync(stableWorker)) return stableWorker;
+  try {
+    const active = resolveInstalledPlugin(home, options.pluginId);
+    const cacheWorker = path.join(active.agentDir, "self-update.cjs");
+    if (fs.existsSync(cacheWorker)) return cacheWorker;
+  } catch {
+    // 无安装记录或缓存不可读，无法回退；调用方静默跳过。
+  }
+  return null;
+}
+
 function cleanupActivationDebris(stableDir) {
   const parent = path.dirname(stableDir);
   const base = path.basename(stableDir);
@@ -398,6 +420,7 @@ function runUpdateAndActivate(options = {}) {
 module.exports = {
   treeDigest,
   resolveInstalledPlugin,
+  resolveUpdaterWorker,
   activateAgentTree,
   activateInstalledAgent,
   acquireUpdateLock,

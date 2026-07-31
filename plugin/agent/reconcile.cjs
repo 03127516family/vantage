@@ -12,7 +12,7 @@ const core = require("./core.cjs");
 const updater = require("./self-update.cjs");
 const { parseClaudeTranscript } = require("./parsers/claude-code.cjs");
 const { parseCodexRollout } = require("./parsers/codex.cjs");
-const { fetchCodexQuota } = require("./quota.cjs");
+const { fetchCodexQuota, pickQuota } = require("./quota.cjs");
 
 // 只回看最近 N 天的会话，避免首次安装时把全部历史一次性灌上去
 const RECENT_DAYS = Number(process.env.VANTAGE_RECENT_DAYS || 7);
@@ -35,6 +35,8 @@ const SELF_UPDATE_INTERVAL_MS = Number(process.env.VANTAGE_SELF_UPDATE_INTERVAL_
 // 用户长时间不打开 Claude 时，由现有计划任务每天静默兜底一次。
 const SELF_UPDATE_SCHEDULED_INTERVAL_MS =
   Number(process.env.VANTAGE_SELF_UPDATE_SCHEDULED_INTERVAL_H || 24) * 3600 * 1000;
+// quota 缓存保质期：拉取失败/节流跳过时沿用上次成功值，超过此龄则丢弃（不给记录贴太旧的额度）。
+const QUOTA_CACHE_MAX_AGE_MS = Number(process.env.VANTAGE_QUOTA_CACHE_MAX_AGE_H || 24) * 3600 * 1000;
 // 要扫描的数据源：目录 + 解析器 + 工具名
 const SOURCES = [
   {
@@ -95,7 +97,13 @@ function selfUpdate(args) {
     if (!due) return;
     state.__last_self_update__ = Date.now();
     core.writeState(state);
-    const worker = path.join(stableCopy, "self-update.cjs");
+    // 优先派生稳定副本的更新器(插件卸载后仍能自更新)；稳定副本缺更新器
+    // (落后到自更新功能之前)时回退到缓存里的，否则自愈会陷入死循环。
+    const worker = updater.resolveUpdaterWorker({ stableDir: stableCopy });
+    if (!worker) {
+      core.log(`self-update: no updater available source=${source}`);
+      return;
+    }
     if (!core.spawnNodeHidden(worker, ["--check"])) {
       core.log(`self-update: spawn failed source=${source}`);
       return;
@@ -262,6 +270,7 @@ async function main() {
   const needCodexQuota = args.only === "codex" || sources.some((s) => s.tool === "codex");
   if (needCodexQuota) {
     const qstate = core.readState();
+    const cachedQuota = qstate.__quota_cache__ || null;
     const isFullScan = args.only !== "codex";
     const throttleKey = isFullScan ? "__last_quota_fetch_full__" : `__last_codex_${args.trigger}__`;
     const throttleMs = isFullScan
@@ -270,18 +279,23 @@ async function main() {
         ? CODEX_EVENT_THROTTLE_MS
         : CODEX_SCHEDULED_THROTTLE_MS;
     const lastQ = Number(qstate[throttleKey] || 0);
+    let fetched = null;
     if (Date.now() - lastQ >= throttleMs) {
       qstate[throttleKey] = Date.now();
+      fetched = await fetchCodexQuota();
+      if (fetched) {
+        // 刷新缓存：供后续失败/节流的轮次兜底，保证每条 codex 记录都带 quota。
+        qstate.__quota_cache__ = { value: fetched, at: Date.now() };
+        core.log(`quota: fetched plan=${fetched.plan_type} used=${fetched.rate_limit?.primary_window?.used_percent ?? "-"}%`);
+      } else {
+        core.log("quota: fetch failed, falling back to cached");
+      }
       core.writeState(qstate);
-      codexQuota = await fetchCodexQuota();
-      core.log(
-        codexQuota
-          ? `quota: fetched plan=${codexQuota.plan_type} used=${codexQuota.rate_limit?.primary_window?.used_percent ?? "-"}%`
-          : "quota: fetch failed (null), records will carry no quota this run"
-      );
     } else {
-      core.log(`quota: throttled (${isFullScan ? "full" : args.trigger}, last ${Math.round((Date.now() - lastQ) / 60000)}min ago)`);
+      core.log(`quota: throttled, using cached (${isFullScan ? "full" : args.trigger}, last ${Math.round((Date.now() - lastQ) / 60000)}min ago)`);
     }
+    // 每条 codex 记录都必须带 quota：本轮新鲜值优先，否则沿用保质期内的缓存。
+    codexQuota = pickQuota(fetched, cachedQuota, QUOTA_CACHE_MAX_AGE_MS);
   }
 
   let totalFiles = 0;
