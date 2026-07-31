@@ -100,15 +100,17 @@ function activateAgentTree(sourceDir, stableDir, options = {}) {
     return { changed: false, digest };
   }
   const sourceDigest = treeDigest(source);
+  let stableDigest = null;
   try {
-    if (treeDigest(stable) === sourceDigest) {
-      if (typeof options.afterActivate === "function") {
-        options.afterActivate({ stable, backup: null, digest: sourceDigest });
-      }
-      return { changed: false, digest: sourceDigest };
-    }
+    stableDigest = treeDigest(stable);
   } catch {
-    // 稳定副本不存在或损坏，继续完整激活。
+    stableDigest = null;
+  }
+  if (stableDigest === sourceDigest) {
+    if (typeof options.afterActivate === "function") {
+      options.afterActivate({ stable, backup: null, digest: sourceDigest });
+    }
+    return { changed: false, digest: sourceDigest };
   }
 
   fs.mkdirSync(path.dirname(stable), { recursive: true });
@@ -165,16 +167,30 @@ function activateInstalledAgent(options = {}) {
   };
 }
 
-function acquireUpdateLock(home = os.homedir()) {
+function acquireUpdateLock(home = os.homedir(), options = {}) {
   const base = path.join(home, ".vantage");
   const lockPath = path.join(base, "self-update.lock");
+  const staleMs = Number(options.staleMs ?? 15 * 60 * 1000);
   fs.mkdirSync(base, { recursive: true });
   try {
     const fd = fs.openSync(lockPath, "wx", 0o600);
     fs.writeFileSync(fd, `${process.pid}\n${new Date().toISOString()}\n`);
     return { fd, path: lockPath };
   } catch (e) {
-    if (e.code === "EEXIST") return null;
+    if (e.code === "EEXIST") {
+      try {
+        if (
+          !options.recovered &&
+          Date.now() - fs.statSync(lockPath).mtimeMs > staleMs
+        ) {
+          fs.unlinkSync(lockPath);
+          return acquireUpdateLock(home, { ...options, recovered: true });
+        }
+      } catch {
+        // 锁在检查期间被其他进程释放；本轮保守跳过。
+      }
+      return null;
+    }
     throw e;
   }
 }

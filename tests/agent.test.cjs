@@ -126,6 +126,10 @@ function vbsLexCheck(line) {
 // ============================================================
 section("1. VBS 内容:引号配平 / 命令行重建 / 错误兜底");
 {
+  const pluginManifest = JSON.parse(
+    fs.readFileSync(path.join(ROOT, ".claude-plugin", "plugin.json"), "utf8")
+  );
+  ok(pluginManifest.version === "1.4.14", "无感自更新发布版本为 1.4.14", pluginManifest.version);
   const cases = [
     ["标准路径", "C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\Xin Cheng\\.vantage\\agent\\reconcile.cjs"],
     ["中文用户名", "C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\张明\\.vantage\\agent\\reconcile.cjs"],
@@ -597,6 +601,35 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
       }
       ok(/repair failed/.test(rollbackError), "激活后的任务修复失败会向上报告");
       ok(updater.treeDigest(rollbackStable) === rollbackBefore, "任务修复失败时恢复旧 Agent");
+
+      let unchangedRepairCalls = 0;
+      let unchangedRepairError = "";
+      try {
+        updater.activateAgentTree(path.join(activeDir, "agent"), stableDir, {
+          afterActivate() {
+            unchangedRepairCalls++;
+            throw new Error("unchanged repair failed");
+          },
+        });
+      } catch (e) {
+        unchangedRepairError = String(e.message || e);
+      }
+      ok(
+        unchangedRepairCalls === 1 && /unchanged repair failed/.test(unchangedRepairError),
+        "哈希一致时任务修复只执行一次且错误不被吞掉",
+        `calls=${unchangedRepairCalls} error=${unchangedRepairError}`
+      );
+
+      const lockHome = mkhome();
+      const firstLock = updater.acquireUpdateLock(lockHome);
+      ok(firstLock && updater.acquireUpdateLock(lockHome) === null, "并发更新只能获取一个锁");
+      updater.releaseUpdateLock(firstLock);
+      const staleLockPath = path.join(lockHome, ".vantage", "self-update.lock");
+      fs.writeFileSync(staleLockPath, "stale");
+      fs.utimesSync(staleLockPath, new Date(0), new Date(0));
+      const recoveredLock = updater.acquireUpdateLock(lockHome, { staleMs: 1000 });
+      ok(Boolean(recoveredLock), "崩溃残留的过期更新锁可自动恢复");
+      updater.releaseUpdateLock(recoveredLock);
 
       if (typeof updater.runOfficialUpdate !== "function") {
         ok(false, "官方 CLI 更新器已实现");
