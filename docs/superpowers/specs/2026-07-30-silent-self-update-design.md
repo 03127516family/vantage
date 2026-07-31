@@ -1,201 +1,162 @@
-# Silent Self-Update Design
+# 无感自更新设计规范
 
-## Problem
+## 问题
 
-Vantage currently starts an official Claude plugin update from the `SessionStart`
-hook, but downloading a new plugin cache does not complete the runtime upgrade:
+Vantage 当前会在 Claude 的 `SessionStart` 钩子中启动官方插件更新，但下载新插件缓存并不代表运行中的代码已经完成升级：
 
-- the active Claude session keeps the `CLAUDE_PLUGIN_ROOT` selected at session
-  start;
-- the Windows Codex task runs `~/.vantage/agent/reconcile.cjs`, not the plugin
-  cache directly;
-- the stable-copy refresh compares only `core.cjs` modification times, so a new
-  cache can be installed without replacing an older stable copy;
-- the Windows verifier refreshes the marketplace but does not prove that
-  `plugin update`, cache activation, stable-copy replacement, and trigger repair
-  all succeeded.
+- 当前 Claude 会话会继续使用启动时确定的 `CLAUDE_PLUGIN_ROOT`；
+- Windows 上的 Codex 计划任务运行的是 `~/.vantage/agent/reconcile.cjs`，不是插件缓存中的文件；
+- 稳定副本目前只比较 `core.cjs` 的修改时间，新缓存安装成功后仍可能误判为不需要同步；
+- Windows 验证脚本目前只刷新 marketplace，没有证明 `plugin update`、缓存激活、稳定副本替换和任务修复全部成功。
 
-The result can be a new version in `installed_plugins.json` while background
-collection still executes older code.
+因此可能出现 `installed_plugins.json` 已经显示新版本，但后台采集仍在执行旧代码的情况。
 
-## User Experience Requirement
+## 用户无感要求
 
-Updating, cache activation, stable-agent synchronization, and trigger repair
-must be imperceptible to the user:
+插件更新、缓存激活、稳定 Agent 同步和任务修复都必须让用户无感：
 
-- no Command Prompt, PowerShell, Windows Terminal, or console window;
-- no VBScript error dialog or Yes/No prompt;
-- no blocking or noticeable delay when Claude starts;
-- no administrator permission request;
-- no interruption of Claude or Codex collection when an update fails;
-- diagnostics go only to `~/.vantage/agent.log`.
+- 不出现命令提示符、PowerShell、Windows Terminal 或其他控制台窗口；
+- 不出现 VBScript 错误弹窗或 Yes/No 确认；
+- 不阻塞 Claude 启动，不产生明显等待；
+- 不申请管理员权限；
+- 更新失败时不影响 Claude 和 Codex 的正常采集；
+- 所有诊断信息只写入 `~/.vantage/agent.log`。
 
-Small background network and disk activity is acceptable. A newly installed
-Claude hook version naturally becomes active in the next Claude session because
-Claude fixes `CLAUDE_PLUGIN_ROOT` at session start.
+允许产生少量后台网络和磁盘活动。由于 Claude 会在会话启动时固定 `CLAUDE_PLUGIN_ROOT`，新安装的 Claude 钩子版本会在下一个 Claude 会话中自然生效。
 
-## Chosen Architecture
+## 选定架构
 
-Use a stable, detached self-update worker and a transactional stable-agent
-deployment.
+使用“稳定后台更新器 + 事务式稳定 Agent 部署”。
 
-`reconcile.cjs` remains the lightweight trigger. Before starting an update it
-ensures the current plugin agent is deployed to `~/.vantage/agent`. It then
-launches the stable worker in the background and immediately returns to normal
-collection.
+`reconcile.cjs` 继续作为轻量触发入口。启动更新前，它先保证当前插件的 Agent 已部署到 `~/.vantage/agent`，然后在后台启动稳定更新器，并立即继续正常采集，不等待网络或复制完成。
 
-The stable worker:
+稳定更新器依次执行：
 
-1. acquires an exclusive update lock;
-2. runs `claude plugin marketplace update dgcrane`;
-3. runs `claude plugin update vantage@dgcrane`;
-4. reads the active user-scope record from
-   `~/.claude/plugins/installed_plugins.json`;
-5. validates that `installPath` exists and its plugin manifest name and version
-   match the active record;
-6. hashes the complete cached `agent` tree;
-7. stages and verifies an exact copy;
-8. transactionally replaces `~/.vantage/agent`, retaining the old directory
-   until the new directory has been activated;
-9. repairs the Codex VBS files and scheduled task using the newly activated
-   code;
-10. writes the installed version and success/failure details to the agent log.
+1. 获取独占更新锁；
+2. 执行 `claude plugin marketplace update dgcrane`；
+3. 执行 `claude plugin update vantage@dgcrane`；
+4. 从 `~/.claude/plugins/installed_plugins.json` 读取用户级当前生效记录；
+5. 校验 `installPath` 是否存在，以及插件清单名称、版本是否与生效记录一致；
+6. 计算新缓存中完整 `agent` 目录的哈希；
+7. 将新 Agent 复制到临时目录并再次校验；
+8. 以事务方式替换 `~/.vantage/agent`，新目录激活前保留旧目录；
+9. 使用新代码修复 Codex 的 VBS 文件和计划任务；
+10. 将实际安装版本以及成功或失败原因写入 Agent 日志。
 
-The worker always executes as the signed-in employee. It uses that employee's
-existing Claude marketplace configuration and Git/SSH credentials. It does not
-require administrator privileges or a server connection into the employee
-machine.
+更新器始终使用当前登录员工的 Windows 身份，复用该员工现有的 Claude marketplace 配置以及 Git/SSH 凭据。它不需要管理员权限，也不需要服务器主动连接员工电脑。
 
-## Trigger Policy
+## 触发策略
 
-There are two silent triggers:
+提供两个静默触发入口：
 
-- Claude `SessionStart`: check at most once every two hours.
-- The existing OS Codex scheduled trigger: check at most once every 24 hours
-  when Claude has not already performed a more recent check.
+- Claude `SessionStart`：最多每两小时检查一次；
+- 现有操作系统 Codex 计划任务：当 Claude 最近没有检查过时，最多每 24 小时兜底检查一次。
 
-Both triggers share the same timestamp and exclusive lock, so concurrent
-sessions and the scheduled task cannot start duplicate updates. The scheduled
-path provides a daily fallback for users who do not open Claude.
+两个入口共用同一个更新时间和独占锁，因此多个 Claude 会话和计划任务不会重复启动更新。计划任务为长时间不打开 Claude 的用户提供每日兜底。
 
-The current `1.4.12` release cannot retroactively gain the post-update worker.
-Therefore the first transition to the release containing this design completes
-stable-copy activation when that new cache is first loaded by Claude. Once that
-release has run once, later releases complete download, activation, stable-copy
-synchronization, and trigger repair in one background update without reopening
-Claude.
+现有 `1.4.12` 无法在发布后反向获得新的更新完成逻辑。因此首次升级到包含本设计的版本后，需要该新缓存被 Claude 加载一次，才能完成稳定副本激活。该版本运行一次以后，后续版本都可以在一次后台更新中完成下载、激活、稳定副本同步和任务修复，不再需要重新打开 Claude。
 
-## Process and Window Handling
+## 进程与窗口处理
 
-On Windows, Node launches `wscript.exe` with `windowsHide: true`, detached
-stdio, and a UTF-16LE VBS file containing `On Error Resume Next`. The VBS starts
-the stable Node worker with window style `0`.
+Windows 上由 Node 使用以下参数启动 `wscript.exe`：
 
-The worker invokes Claude CLI through a hidden child process with:
+- `windowsHide: true`；
+- 后台分离运行；
+- 不继承标准输入、输出和错误流；
+- VBS 使用 UTF-16LE 编码；
+- VBS 第一行包含 `On Error Resume Next`；
+- VBS 使用窗口样式 `0` 启动稳定 Node 更新器。
 
-- a finite timeout for each marketplace/plugin command;
-- `GIT_SSH_COMMAND` using `BatchMode=yes` and a connection timeout;
-- Git credential prompting disabled;
-- stdout and stderr captured and appended to `agent.log`;
-- no inherited terminal handles.
+稳定更新器调用 Claude CLI 时必须：
 
-macOS and Linux use an equivalent detached process with ignored stdio and log
-redirection.
+- 为 marketplace 更新和插件更新分别设置有限超时；
+- 设置带 `BatchMode=yes` 和连接超时的 `GIT_SSH_COMMAND`；
+- 禁止 Git 凭据交互提示；
+- 捕获标准输出和错误输出，只将有限长度的尾部写入 `agent.log`；
+- 不继承任何终端句柄。
 
-The collection hook never waits for marketplace access, plugin download,
-hashing, or synchronization.
+macOS 和 Linux 使用等价的后台分离进程、忽略终端输入输出并将日志写入文件。
 
-## Transactional Synchronization
+采集钩子绝不等待 marketplace 访问、插件下载、哈希计算或同步完成。
 
-Modification times are not used to decide whether code is current.
+## 事务式同步
 
-The synchronization unit is the complete `agent` directory:
+不再使用文件修改时间判断代码是否为最新版本。
 
-1. calculate a deterministic SHA-256 tree digest from every relative filename
-   and file content;
-2. return immediately only when source and stable digests match;
-3. copy the source into a sibling staging directory;
-4. verify the staging digest equals the source digest;
-5. rename the current stable directory to a backup;
-6. rename staging to the stable path;
-7. verify the activated digest;
-8. delete the backup only after successful activation.
+完整 `agent` 目录作为一次同步单元：
 
-If staging, validation, or activation fails, restore the backup and keep the
-previous working agent. Temporary and backup directories are cleaned on the
-next successful run. The update lock prevents two workers from replacing the
-directory simultaneously.
+1. 根据每个文件的相对路径和文件内容计算确定性的 SHA-256 目录摘要；
+2. 只有源目录和稳定目录的完整摘要一致时才直接跳过；
+3. 将源目录完整复制到同级临时目录；
+4. 验证临时目录摘要与源目录完全一致；
+5. 将现有稳定目录改名为备份目录；
+6. 将临时目录改名为正式稳定目录；
+7. 再次验证正式稳定目录摘要；
+8. 只有激活成功后才删除备份。
 
-## Installed Plugin Validation
+如果复制、校验或激活失败，则恢复备份并继续使用原有稳定 Agent。下一次成功运行会清理残留的临时目录和备份目录。独占锁用于防止两个更新器同时替换稳定目录。
 
-The worker treats `installed_plugins.json` as the activation source of truth,
-not the numerically highest cache directory. It selects the newest user-scope
-record for `vantage@dgcrane` and requires:
+## 已安装插件校验
 
-- an absolute existing `installPath`;
-- an existing `.claude-plugin/plugin.json`;
-- manifest name `vantage`;
-- manifest version equal to the installation record;
-- an existing `agent/reconcile.cjs`;
-- an existing `agent/core.cjs`;
-- an existing `agent/installers.cjs`.
+更新器以 `installed_plugins.json` 为生效来源，不以缓存目录中数字最大的版本为准。
 
-Failure at any validation step aborts activation and leaves the stable agent
-unchanged.
+它选择 `vantage@dgcrane` 最新的用户级记录，并要求：
 
-## Error Handling
+- `installPath` 是存在的绝对路径；
+- `.claude-plugin/plugin.json` 存在；
+- 清单名称是 `vantage`；
+- 清单版本与安装记录版本一致；
+- `agent/reconcile.cjs` 存在；
+- `agent/core.cjs` 存在；
+- `agent/installers.cjs` 存在。
 
-All update failures are non-fatal to data collection. The worker:
+任何校验失败都会停止激活，并保持稳定 Agent 不变。
 
-- records the failed phase, exit code, timeout, and a bounded output tail;
-- releases its lock;
-- preserves or restores the last working stable agent;
-- never changes the active installation record itself;
-- never displays an interactive error.
+## 错误处理
 
-The self-update timestamp prevents failure storms. A failed scheduled check may
-retry at the next configured interval; normal Claude and Codex collection
-continues with the existing stable agent.
+所有自更新错误都不能影响数据采集。更新器必须：
 
-## Verification
+- 记录失败阶段、退出码、是否超时以及有限长度的输出尾部；
+- 释放更新锁；
+- 保留或恢复最后一个可工作的稳定 Agent；
+- 不自行修改 `installed_plugins.json`；
+- 不显示任何交互式错误。
 
-Automated tests must cover:
+更新时间可以防止失败后频繁重试。失败的计划任务会等到下一个配置周期再试；Claude 和 Codex 继续使用现有稳定 Agent 采集。
 
-- active-record selection instead of highest cache-directory selection;
-- rejection of missing, mismatched, or incomplete cache entries;
-- deterministic tree digests independent of directory enumeration order;
-- synchronization when timestamps are equal but contents differ;
-- no replacement when complete hashes match;
-- successful staged activation with exact source/stable hashes;
-- rollback when staging or activation fails;
-- lock exclusion for concurrent workers;
-- the update command order: marketplace first, plugin second, activation last;
-- timeouts and non-interactive Git/SSH environment;
-- SessionStart two-hour throttling and scheduled 24-hour fallback;
-- Windows VBS lexical validity and hidden process options.
+## 验证要求
 
-`win-verify.cjs` must perform an end-to-end machine check:
+自动测试必须覆盖：
 
-- run the official marketplace and plugin update;
-- resolve the active record again after updating;
-- validate the manifest and required files;
-- activate the stable copy through the production worker;
-- compare every cached-agent and stable-agent SHA-256 value;
-- validate and execute both VBS launchers without a modal dialog;
-- run the scheduled task and verify it does not remain running;
-- report each layer separately rather than declaring success from a version
-  string alone.
+- 按当前安装记录选择缓存，而不是选择版本号最大的缓存目录；
+- 拒绝缺失、版本不一致或文件不完整的缓存；
+- 目录遍历顺序不同仍得到相同摘要；
+- 文件时间相同但内容不同时仍执行同步；
+- 完整哈希一致时不替换稳定目录；
+- 临时复制并激活成功后，源目录与稳定目录哈希完全一致；
+- 临时复制或激活失败时恢复旧目录；
+- 并发更新器之间的锁互斥；
+- 更新顺序必须是 marketplace 更新、插件更新、最后激活；
+- CLI 超时以及非交互 Git/SSH 环境；
+- SessionStart 两小时节流和计划任务 24 小时兜底；
+- Windows VBS 词法正确，所有子进程均隐藏运行。
 
-## Success Criteria
+`win-verify.cjs` 必须完成 Windows 实机端到端检查：
 
-- A plugin update is not considered complete until the active cache and stable
-  agent have identical tree digests.
-- Later releases activate automatically after download without requiring a new
-  Claude session or a user command.
-- A daily scheduled fallback works when Claude is not opened.
-- Update and synchronization never create a visible window or prompt.
-- Any failure preserves the last working code and does not interrupt
-  collection.
-- The Windows verifier can distinguish marketplace refresh, plugin download,
-  cache activation, stable synchronization, trigger repair, and hidden
-  execution as separate pass/fail results.
+- 真实执行官方 marketplace 更新和插件更新；
+- 更新后重新读取当前生效安装记录；
+- 校验插件清单及必要文件；
+- 通过生产更新器激活稳定副本；
+- 比较缓存 Agent 和稳定 Agent 中每个文件的 SHA-256；
+- 校验并真实执行两个 VBS 启动器，确保没有模态弹窗；
+- 运行计划任务并确认任务不会一直处于运行状态；
+- 分别报告 marketplace 刷新、插件下载、缓存激活、稳定同步、任务修复和隐藏执行结果，不能仅凭版本号宣布成功。
+
+## 成功标准
+
+- 当前生效缓存和稳定 Agent 的完整目录摘要一致后，才能认为插件更新完成；
+- 后续版本下载后自动激活，不需要新开 Claude 会话，也不需要用户执行命令；
+- 用户不打开 Claude 时，每日计划任务仍能兜底更新；
+- 更新和同步过程中绝不产生可见窗口或交互提示；
+- 任一步失败都保留最后一个可工作的版本，不影响采集；
+- Windows 验证脚本能够分别判断 marketplace 刷新、插件下载、缓存激活、稳定同步、任务修复和隐藏执行是否成功。
