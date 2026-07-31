@@ -158,6 +158,7 @@ if (active && activeUpdater) {
         afterActivate() {
           require(path.join(active.agentDir, "trigger.cjs")).ensureCodexTriggers({
             log() {},
+            strict: true,
           });
         },
       });
@@ -326,6 +327,25 @@ ok(
   taskWait.error?.message || tailText(taskWait.stdout || taskWait.stderr, 6)
 );
 if (completedTask) info("计划任务状态: " + JSON.stringify(completedTask));
+const taskXmlResult = spawnSync(
+  "schtasks.exe",
+  ["/Query", "/TN", "VantageCodexHourly", "/XML"],
+  { encoding: null, windowsHide: true, timeout: 15000 }
+);
+let actualTaskXml = "";
+try {
+  actualTaskXml = installers.decodeConsoleOutput(taskXmlResult.stdout || Buffer.alloc(0));
+} catch {}
+ok(
+  taskXmlResult.status === 0 &&
+    installers &&
+    installers.isValidHourlyTaskXml(
+      actualTaskXml,
+      path.join(home, ".vantage", "run-reconcile.vbs")
+    ),
+  "实际计划任务 XML 包含每小时、StartWhenAvailable 和正确 VBS",
+  tailText(taskXmlResult.stderr)
+);
 
 // ---- 7. 日志尾部 ----
 try {

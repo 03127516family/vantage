@@ -108,6 +108,33 @@ function cleanupActivationDebris(stableDir) {
   }
 }
 
+function findRecoveryBackup(stableDir) {
+  const parent = path.dirname(stableDir);
+  const prefix = `${path.basename(stableDir)}.backup.`;
+  let candidates = [];
+  try {
+    candidates = fs
+      .readdirSync(parent)
+      .filter((name) => name.startsWith(prefix))
+      .map((name) => {
+        const full = path.join(parent, name);
+        return { full, mtimeMs: fs.statSync(full).mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  } catch {
+    return null;
+  }
+  for (const candidate of candidates) {
+    try {
+      treeDigest(candidate.full);
+      return candidate.full;
+    } catch {
+      // 损坏的 backup 不可作为恢复点，继续找下一份。
+    }
+  }
+  return null;
+}
+
 /** 将完整 Agent 目录以 staging + backup 方式激活；失败时恢复旧目录。 */
 function activateAgentTree(sourceDir, stableDir, options = {}) {
   const source = path.resolve(sourceDir);
@@ -136,8 +163,10 @@ function activateAgentTree(sourceDir, stableDir, options = {}) {
   }
 
   fs.mkdirSync(path.dirname(stable), { recursive: true });
-  const stage = `${stable}.stage.${process.pid}`;
-  const backup = `${stable}.backup.${process.pid}`;
+  const recoveryBackup = !fs.existsSync(stable) ? findRecoveryBackup(stable) : null;
+  const nonce = `${process.pid}.${Date.now()}`;
+  const stage = `${stable}.stage.${nonce}`;
+  const backup = `${stable}.backup.${nonce}`;
   fs.rmSync(stage, { recursive: true, force: true });
   fs.rmSync(backup, { recursive: true, force: true });
   let movedOld = false;
@@ -169,6 +198,8 @@ function activateAgentTree(sourceDir, stableDir, options = {}) {
       if (activatedNew) fs.rmSync(stable, { recursive: true, force: true });
       if (movedOld) {
         fs.renameSync(backup, stable);
+      } else if (recoveryBackup && !fs.existsSync(stable)) {
+        fs.renameSync(recoveryBackup, stable);
       }
     } catch {
       // 保留原始错误；下次运行会继续清理和恢复。

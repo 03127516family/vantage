@@ -628,6 +628,27 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
         "成功激活后清理崩溃残留的 staging 和 backup"
       );
 
+      const orphanStable = path.join(home, ".vantage", "orphan-agent");
+      const orphanBackup = `${orphanStable}.backup.999`;
+      fs.cpSync(path.join(decoyDir, "agent"), orphanBackup, { recursive: true });
+      const orphanDigest = updater.treeDigest(orphanBackup);
+      let orphanFailure = "";
+      try {
+        updater.activateAgentTree(path.join(activeDir, "agent"), orphanStable, {
+          beforeActivate() {
+            throw new Error("second activation failed");
+          },
+        });
+      } catch (e) {
+        orphanFailure = String(e.message || e);
+      }
+      ok(
+        /second activation failed/.test(orphanFailure) &&
+          fs.existsSync(orphanStable) &&
+          updater.treeDigest(orphanStable) === orphanDigest,
+        "本次激活失败时恢复上次崩溃遗留的可用 backup"
+      );
+
       let unchangedRepairCalls = 0;
       let unchangedRepairError = "";
       try {
@@ -828,6 +849,11 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
           /LastTaskResult/.test(verifySource) &&
           /lastRunAdvanced/.test(verifySource),
         "Windows 实机验证等待本次任务完成并断言结果"
+      );
+      ok(
+        /strict:\s*true/.test(verifySource) &&
+          /isValidHourlyTaskXml/.test(verifySource),
+        "Windows 实机激活使用严格修复并校验实际任务 XML"
       );
     }
   }
