@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const REQUIRED_AGENT_FILES = ["core.cjs", "reconcile.cjs", "installers.cjs"];
 
@@ -92,11 +93,18 @@ function activateAgentTree(sourceDir, stableDir, options = {}) {
   const source = path.resolve(sourceDir);
   const stable = path.resolve(stableDir);
   if (source === stable) {
-    return { changed: false, digest: treeDigest(source) };
+    const digest = treeDigest(source);
+    if (typeof options.afterActivate === "function") {
+      options.afterActivate({ stable, backup: null, digest });
+    }
+    return { changed: false, digest };
   }
   const sourceDigest = treeDigest(source);
   try {
     if (treeDigest(stable) === sourceDigest) {
+      if (typeof options.afterActivate === "function") {
+        options.afterActivate({ stable, backup: null, digest: sourceDigest });
+      }
       return { changed: false, digest: sourceDigest };
     }
   } catch {
@@ -122,6 +130,9 @@ function activateAgentTree(sourceDir, stableDir, options = {}) {
     fs.renameSync(stage, stable);
     if (treeDigest(stable) !== sourceDigest) {
       throw new Error("Agent 激活后哈希校验失败");
+    }
+    if (typeof options.afterActivate === "function") {
+      options.afterActivate({ stable, backup, digest: sourceDigest });
     }
     fs.rmSync(backup, { recursive: true, force: true });
     return { changed: true, digest: sourceDigest };
@@ -178,6 +189,122 @@ function releaseUpdateLock(lock) {
   } catch {}
 }
 
+function cliInvocation(args, platform = process.platform) {
+  if (platform === "win32") {
+    return {
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", ["claude", ...args].join(" ")],
+    };
+  }
+  return { command: "claude", args };
+}
+
+function outputTail(result, maxLength = 4096) {
+  const text = `${result?.stdout || ""}\n${result?.stderr || ""}`.trim();
+  return text.length > maxLength ? text.slice(-maxLength) : text;
+}
+
+/** 依次执行 Claude 官方 marketplace/plugin 更新；任何一步失败立即停止。 */
+function runOfficialUpdate(options = {}) {
+  const marketplace = options.marketplace || "dgcrane";
+  const pluginId = options.pluginId || `vantage@${marketplace}`;
+  if (!/^[A-Za-z0-9._-]+$/.test(marketplace)) throw new Error("marketplace 名称不安全");
+  if (!/^[A-Za-z0-9@._-]+$/.test(pluginId)) throw new Error("plugin ID 不安全");
+  const platform = options.platform || process.platform;
+  const timeout = Number(options.timeoutMs || process.env.VANTAGE_SELF_UPDATE_TIMEOUT_MS || 120000);
+  const runCli = options.runCli || spawnSync;
+  const env = {
+    ...process.env,
+    ...(options.env || {}),
+    GIT_TERMINAL_PROMPT: "0",
+    GCM_INTERACTIVE: "Never",
+    GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=10",
+  };
+  const steps = [
+    { phase: "marketplace", args: ["plugin", "marketplace", "update", marketplace] },
+    { phase: "plugin", args: ["plugin", "update", pluginId] },
+  ];
+  for (const step of steps) {
+    const invocation = cliInvocation(step.args, platform);
+    let result;
+    try {
+      result = runCli(invocation.command, invocation.args, {
+        encoding: "utf8",
+        env,
+        timeout,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (e) {
+      result = { status: null, error: e, stdout: "", stderr: String(e.message || e) };
+    }
+    if (result?.status !== 0 || result?.error) {
+      return {
+        ok: false,
+        phase: step.phase,
+        status: result?.status ?? null,
+        timedOut: result?.error?.code === "ETIMEDOUT",
+        outputTail: outputTail(result),
+      };
+    }
+  }
+  return { ok: true, phase: "complete", status: 0, outputTail: "" };
+}
+
+/** 完整闭环：官方更新成功后，激活生效缓存并使用新代码修复触发器。 */
+function runUpdateAndActivate(options = {}) {
+  const home = options.home || os.homedir();
+  const pluginId = options.pluginId || "vantage@dgcrane";
+  const marketplace = options.marketplace || pluginId.split("@")[1] || "dgcrane";
+  const writeLog = options.log || require("./core.cjs").log;
+  const update = options.runOfficialUpdate || runOfficialUpdate;
+  const activate = options.activateInstalledAgent || activateInstalledAgent;
+  const stableDir = options.stableDir || path.join(home, ".vantage", "agent");
+  const repair =
+    options.repairTriggers ||
+    (() => {
+      const trigger = require(path.join(stableDir, "trigger.cjs"));
+      trigger.ensureCodexTriggers({ log: writeLog });
+    });
+  const lock = acquireUpdateLock(home);
+  if (!lock) {
+    writeLog("self-update: skipped (another updater is running)");
+    return { ok: true, skipped: true, reason: "locked" };
+  }
+  try {
+    const updated = update({
+      marketplace,
+      pluginId,
+      timeoutMs: options.timeoutMs,
+      platform: options.platform,
+      runCli: options.runCli,
+      env: options.env,
+    });
+    if (!updated.ok) {
+      writeLog(
+        `self-update: ${updated.phase} failed status=${updated.status} timeout=${updated.timedOut ? 1 : 0}` +
+          (updated.outputTail ? ` output=${updated.outputTail}` : "")
+      );
+      return updated;
+    }
+    const activated = activate({
+      home,
+      pluginId,
+      stableDir,
+      afterActivate: () => repair(stableDir),
+    });
+    writeLog(
+      `self-update: complete version=${activated.version} changed=${activated.changed ? 1 : 0} digest=${activated.digest}`
+    );
+    return { ok: true, phase: "complete", ...activated };
+  } catch (e) {
+    writeLog(`self-update: activate failed ${String(e.message || e)}`);
+    return { ok: false, phase: "activate", error: String(e.message || e) };
+  } finally {
+    releaseUpdateLock(lock);
+  }
+}
+
 module.exports = {
   treeDigest,
   resolveInstalledPlugin,
@@ -185,4 +312,14 @@ module.exports = {
   activateInstalledAgent,
   acquireUpdateLock,
   releaseUpdateLock,
+  runOfficialUpdate,
+  runUpdateAndActivate,
 };
+
+if (require.main === module && process.argv.includes("--check")) {
+  try {
+    runUpdateAndActivate();
+  } catch {
+    // 后台更新永远静默退出，错误已由 runUpdateAndActivate 写入日志。
+  }
+}

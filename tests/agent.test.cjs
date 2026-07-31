@@ -580,6 +580,99 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
         mismatch = String(e.message || e);
       }
       ok(/版本/.test(mismatch), "拒绝安装记录与清单版本不一致", mismatch);
+      fs.writeFileSync(manifestPath, JSON.stringify({ name: "vantage", version: "1.4.14" }));
+
+      const rollbackStable = path.join(home, ".vantage", "rollback-agent");
+      fs.cpSync(path.join(decoyDir, "agent"), rollbackStable, { recursive: true });
+      const rollbackBefore = updater.treeDigest(rollbackStable);
+      let rollbackError = "";
+      try {
+        updater.activateAgentTree(path.join(activeDir, "agent"), rollbackStable, {
+          afterActivate() {
+            throw new Error("repair failed");
+          },
+        });
+      } catch (e) {
+        rollbackError = String(e.message || e);
+      }
+      ok(/repair failed/.test(rollbackError), "激活后的任务修复失败会向上报告");
+      ok(updater.treeDigest(rollbackStable) === rollbackBefore, "任务修复失败时恢复旧 Agent");
+
+      if (typeof updater.runOfficialUpdate !== "function") {
+        ok(false, "官方 CLI 更新器已实现");
+      } else {
+        const calls = [];
+        const updated = updater.runOfficialUpdate({
+          marketplace: "dgcrane",
+          pluginId: "vantage@dgcrane",
+          platform: "win32",
+          runCli(command, args, options) {
+            calls.push({ command, args, options });
+            return { status: 0, stdout: "ok", stderr: "" };
+          },
+        });
+        ok(updated.ok === true && calls.length === 2, "官方更新两步均成功");
+        ok(
+          calls[0].args.join(" ").includes("plugin marketplace update dgcrane"),
+          "先执行 marketplace update"
+        );
+        ok(
+          calls[1].args.join(" ").includes("plugin update vantage@dgcrane"),
+          "再执行 plugin update"
+        );
+        ok(calls.every((c) => c.options.windowsHide === true), "CLI 子进程全部隐藏");
+        ok(calls.every((c) => c.options.timeout > 0), "CLI 子进程全部设置有限超时");
+        ok(
+          calls.every(
+            (c) =>
+              c.options.env.GIT_TERMINAL_PROMPT === "0" &&
+              c.options.env.GCM_INTERACTIVE === "Never" &&
+              c.options.env.GIT_SSH_COMMAND.includes("BatchMode=yes")
+          ),
+          "CLI 禁止 Git/SSH 交互"
+        );
+
+        const failedCalls = [];
+        const failedUpdate = updater.runOfficialUpdate({
+          marketplace: "dgcrane",
+          pluginId: "vantage@dgcrane",
+          runCli(command, args, options) {
+            failedCalls.push({ command, args, options });
+            return { status: 1, stdout: "x".repeat(6000), stderr: "network failed" };
+          },
+        });
+        ok(
+          failedUpdate.ok === false &&
+            failedUpdate.phase === "marketplace" &&
+            failedCalls.length === 1,
+          "marketplace 失败后不再执行 plugin update"
+        );
+        ok(failedUpdate.outputTail.length <= 4096, "失败输出只保留有限尾部");
+      }
+
+      if (typeof updater.runUpdateAndActivate !== "function") {
+        ok(false, "更新、激活、任务修复闭环已实现");
+      } else {
+        const phases = [];
+        const closedLoop = updater.runUpdateAndActivate({
+          home,
+          pluginId: "vantage@dgcrane",
+          runOfficialUpdate() {
+            phases.push("update");
+            return { ok: true };
+          },
+          activateInstalledAgent(options) {
+            phases.push("activate");
+            return updater.activateInstalledAgent(options);
+          },
+          repairTriggers() {
+            phases.push("repair");
+          },
+          log() {},
+        });
+        ok(closedLoop.ok === true, "完整更新闭环成功");
+        ok(phases.join(",") === "update,activate,repair", "严格按更新、激活、修复顺序执行");
+      }
     }
   }
 
@@ -587,6 +680,24 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
   section("10. 自更新命令链 + wscript 隐藏 VBS:词法 / 逐字符重建 / 平台分支");
   {
     const core = require(path.join(AGENT, "core.cjs"));
+    if (typeof core.hiddenNodeVbs !== "function") {
+      ok(false, "隐藏 Node 更新器 VBS 生成函数已实现");
+    } else {
+      const body = core.hiddenNodeVbs(
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Users\\张明\\.vantage\\agent\\self-update.cjs",
+        ["--check"]
+      );
+      const lines = body.split("\r\n").filter(Boolean);
+      const { error, strings } = vbsLexCheck(lines[1] || "");
+      ok(!error, "隐藏 Node 更新器 VBS 词法正确", error);
+      ok(
+        strings[1] ===
+          '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\张明\\.vantage\\agent\\self-update.cjs" --check',
+        "隐藏 Node 更新器命令行逐字符一致",
+        strings[1]
+      );
+    }
     const cmdWin = core.buildSelfUpdateCmd("dgcrane", "vantage@dgcrane", "win32");
     ok(
       cmdWin.startsWith('set "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10" &&'),

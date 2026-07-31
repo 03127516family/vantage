@@ -261,6 +261,50 @@ function hiddenRunVbs(command, logPath = LOG_PATH) {
   );
 }
 
+/** 隐藏启动 Node 脚本的 VBS 内容。参数只接受不含双引号的独立字符串。 */
+function hiddenNodeVbs(nodePath, scriptPath, args = []) {
+  const values = [nodePath, scriptPath, ...args].map((value) => String(value));
+  if (values.some((value) => value.includes('"'))) throw new Error("Node 隐藏启动参数不能包含双引号");
+  const command = [
+    `"${values[0]}"`,
+    `"${values[1]}"`,
+    ...values.slice(2).map((value) => (/[\s&|<>^]/.test(value) ? `"${value}"` : value)),
+  ].join(" ");
+  return (
+    "On Error Resume Next\r\n" +
+    `CreateObject("WScript.Shell").Run "${command.replace(/"/g, '""')}", 0, False\r\n`
+  );
+}
+
+/** 后台无窗启动稳定 Node 脚本，不继承终端，也不等待执行完成。 */
+function spawnNodeHidden(scriptPath, args = []) {
+  try {
+    if (process.platform === "win32") {
+      const vbsPath = path.join(BASE_DIR, "vantage-self-update.vbs");
+      writeFileAtomic(
+        vbsPath,
+        Buffer.from(BOM + hiddenNodeVbs(process.execPath, scriptPath, args), "utf16le")
+      );
+      const child = spawn("wscript.exe", [vbsPath], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      child.unref();
+      return true;
+    }
+    const child = spawn(process.execPath, [scriptPath, ...args], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 彻底无窗地跑一段 shell 命令串，stdout/stderr 追加到 agent.log。
  *  Windows 改走 wscript:Node detached 子进程会新建控制台窗口,windowsHide 的
  *  SW_HIDE 在 "Windows Terminal 设为默认终端" 的机器上可能不被尊重,员工仍看到黑窗。
@@ -311,4 +355,6 @@ module.exports = {
   spawnShellHidden,
   buildSelfUpdateCmd,
   hiddenRunVbs,
+  hiddenNodeVbs,
+  spawnNodeHidden,
 };
