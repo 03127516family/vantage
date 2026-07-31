@@ -508,6 +508,82 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
   }
 
   // ============================================================
+  section("9b. 自更新激活:安装记录 / 完整哈希 / 事务同步");
+  {
+    const updaterPath = path.join(AGENT, "self-update.cjs");
+    if (!fs.existsSync(updaterPath)) {
+      ok(false, "self-update.cjs 已实现");
+    } else {
+      const updater = require(updaterPath);
+      const home = mkhome();
+      const cacheRoot = path.join(home, ".claude", "plugins", "cache", "dgcrane", "vantage");
+      const activeDir = path.join(cacheRoot, "1.4.14");
+      const decoyDir = path.join(cacheRoot, "9.9.9");
+      const stableDir = path.join(home, ".vantage", "agent");
+      const writePlugin = (dir, version, body) => {
+        fs.mkdirSync(path.join(dir, ".claude-plugin"), { recursive: true });
+        fs.mkdirSync(path.join(dir, "agent"), { recursive: true });
+        fs.writeFileSync(
+          path.join(dir, ".claude-plugin", "plugin.json"),
+          JSON.stringify({ name: "vantage", version })
+        );
+        for (const file of ["core.cjs", "reconcile.cjs", "installers.cjs"]) {
+          fs.writeFileSync(path.join(dir, "agent", file), `${body}:${file}\n`);
+        }
+      };
+      writePlugin(activeDir, "1.4.14", "new");
+      writePlugin(decoyDir, "9.9.9", "decoy");
+      fs.mkdirSync(path.dirname(stableDir), { recursive: true });
+      fs.cpSync(path.join(decoyDir, "agent"), stableDir, { recursive: true });
+      const sameTime = new Date("2026-07-30T00:00:00.000Z");
+      fs.utimesSync(path.join(activeDir, "agent", "core.cjs"), sameTime, sameTime);
+      fs.utimesSync(path.join(stableDir, "core.cjs"), sameTime, sameTime);
+
+      const installedDir = path.join(home, ".claude", "plugins");
+      fs.mkdirSync(installedDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(installedDir, "installed_plugins.json"),
+        JSON.stringify({
+          plugins: {
+            "vantage@dgcrane": [
+              {
+                scope: "user",
+                version: "1.4.14",
+                installPath: activeDir,
+                lastUpdated: "2026-07-30T12:00:00.000Z",
+              },
+            ],
+          },
+        })
+      );
+
+      const active = updater.resolveInstalledPlugin(home, "vantage@dgcrane");
+      ok(active.version === "1.4.14", "按安装记录选择生效版本");
+      ok(active.installPath === activeDir, "不按缓存目录最大版本猜测");
+      const oldDigest = updater.treeDigest(stableDir);
+      const sourceDigest = updater.treeDigest(path.join(activeDir, "agent"));
+      ok(oldDigest !== sourceDigest, "mtime 相同但内容不同可由完整哈希识别");
+
+      const result = updater.activateInstalledAgent({ home, pluginId: "vantage@dgcrane" });
+      ok(result.changed === true && result.version === "1.4.14", "激活安装记录指向的新 Agent");
+      ok(updater.treeDigest(stableDir) === sourceDigest, "稳定副本与生效缓存完整哈希一致");
+
+      const second = updater.activateInstalledAgent({ home, pluginId: "vantage@dgcrane" });
+      ok(second.changed === false, "完整哈希一致时不重复替换");
+
+      const manifestPath = path.join(activeDir, ".claude-plugin", "plugin.json");
+      fs.writeFileSync(manifestPath, JSON.stringify({ name: "vantage", version: "1.4.13" }));
+      let mismatch = "";
+      try {
+        updater.resolveInstalledPlugin(home, "vantage@dgcrane");
+      } catch (e) {
+        mismatch = String(e.message || e);
+      }
+      ok(/版本/.test(mismatch), "拒绝安装记录与清单版本不一致", mismatch);
+    }
+  }
+
+  // ============================================================
   section("10. 自更新命令链 + wscript 隐藏 VBS:词法 / 逐字符重建 / 平台分支");
   {
     const core = require(path.join(AGENT, "core.cjs"));
