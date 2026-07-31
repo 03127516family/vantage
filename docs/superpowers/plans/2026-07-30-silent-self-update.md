@@ -17,7 +17,7 @@
 - 新建：`plugin/agent/self-update.cjs`
 - 修改：`tests/agent.test.cjs`
 
-- [ ] **步骤 1：先写失败测试**
+- [x] **步骤 1：先写失败测试**
 
 在 `tests/agent.test.cjs` 中创建临时 HOME、两个缓存版本和
 `installed_plugins.json`，要求以下接口存在并满足行为：
@@ -42,7 +42,7 @@ ok(updater.treeDigest(stableAgent) === source, "稳定副本与生效缓存摘�
 
 同时覆盖清单版本不一致、必要文件缺失、内容一致不替换以及人为制造激活失败后旧目录仍完整。
 
-- [ ] **步骤 2：运行测试并确认正确失败**
+- [x] **步骤 2：运行测试并确认正确失败**
 
 运行：
 
@@ -52,7 +52,7 @@ node tests/agent.test.cjs
 
 预期：失败原因为 `self-update.cjs` 或目标导出函数不存在。
 
-- [ ] **步骤 3：实现最小同步模块**
+- [x] **步骤 3：实现最小同步模块**
 
 `plugin/agent/self-update.cjs` 导出：
 
@@ -76,7 +76,7 @@ module.exports = {
 - 任何失败恢复 backup；
 - 锁通过 `fs.openSync(lockPath, "wx")` 获取。
 
-- [ ] **步骤 4：运行测试并确认通过**
+- [x] **步骤 4：运行测试并确认通过**
 
 ```bash
 node tests/agent.test.cjs
@@ -84,7 +84,7 @@ node tests/agent.test.cjs
 
 预期：新增同步测试全部通过，既有测试不回退。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```bash
 git add -f plugin/agent/self-update.cjs tests/agent.test.cjs
@@ -99,7 +99,7 @@ git commit -m "feat(plugin): add transactional agent activation"
 - 修改：`plugin/agent/core.cjs`
 - 修改：`tests/agent.test.cjs`
 
-- [ ] **步骤 1：先写失败测试**
+- [x] **步骤 1：先写失败测试**
 
 测试期望更新器严格执行：
 
@@ -122,7 +122,7 @@ ok(calls.every((c) => c.options.env.GIT_TERMINAL_PROMPT === "0"), "禁止 Git �
 
 再测试第一条失败时不执行第二条、第二条失败时不激活、输出日志只保留有限尾部。
 
-- [ ] **步骤 2：确认测试失败**
+- [x] **步骤 2：确认测试失败**
 
 ```bash
 node tests/agent.test.cjs
@@ -130,7 +130,7 @@ node tests/agent.test.cjs
 
 预期：失败原因为 `runOfficialUpdate` 尚未实现。
 
-- [ ] **步骤 3：实现 CLI 执行和隐藏启动**
+- [x] **步骤 3：实现 CLI 执行和隐藏启动**
 
 `self-update.cjs` 增加：
 
@@ -149,7 +149,7 @@ function runUpdateAndActivate(options) {
 UTF-16LE VBS 和窗口样式 `0`；其他平台使用 `spawn(process.execPath, ...)`，
 均为 detached、`stdio: "ignore"`、`windowsHide: true`。
 
-- [ ] **步骤 4：确认全部测试通过**
+- [x] **步骤 4：确认全部测试通过**
 
 ```bash
 node tests/agent.test.cjs
@@ -157,7 +157,7 @@ node --check plugin/agent/self-update.cjs
 node --check plugin/agent/core.cjs
 ```
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```bash
 git add -f plugin/agent/self-update.cjs plugin/agent/core.cjs tests/agent.test.cjs
@@ -171,7 +171,7 @@ git commit -m "feat(plugin): run official updates silently with timeout"
 - 修改：`plugin/agent/reconcile.cjs`
 - 修改：`tests/agent.test.cjs`
 
-- [ ] **步骤 1：先写失败测试**
+- [x] **步骤 1：先写失败测试**
 
 将触发决策抽成纯函数并测试：
 
@@ -197,13 +197,13 @@ ok(!shouldCheckForUpdate({
 测试必须证明触发函数只静默派生
 `~/.vantage/agent/self-update.cjs --check`，不等待更新完成。
 
-- [ ] **步骤 2：确认测试失败**
+- [x] **步骤 2：确认测试失败**
 
 ```bash
 node tests/agent.test.cjs
 ```
 
-- [ ] **步骤 3：实现双触发与哈希同步**
+- [x] **步骤 3：实现双触发与哈希同步**
 
 在 `reconcile.cjs` 中：
 
@@ -214,13 +214,13 @@ node tests/agent.test.cjs
 - 写入时间戳后静默启动稳定更新器；
 - `event` 触发器和普通稳定运行不检查更新。
 
-- [ ] **步骤 4：运行回归测试**
+- [x] **步骤 4：运行回归测试**
 
 ```bash
 node tests/agent.test.cjs
 ```
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```bash
 git add -f plugin/agent/reconcile.cjs tests/agent.test.cjs
@@ -234,7 +234,7 @@ git commit -m "feat(plugin): add silent daily update fallback"
 - 修改：`plugin/win-verify.cjs`
 - 修改：`tests/agent.test.cjs`
 
-- [ ] **步骤 1：先写失败测试**
+- [x] **步骤 1：先写失败测试**
 
 静态测试要求 `win-verify.cjs`：
 
@@ -246,13 +246,13 @@ ok(verifySource.includes("activateInstalledAgent"), "使用生产激活逻辑");
 ok(verifySource.includes("Get-ScheduledTask") || verifySource.includes("schtasks"), "检查计划任务");
 ```
 
-- [ ] **步骤 2：确认测试失败**
+- [x] **步骤 2：确认测试失败**
 
 ```bash
 node tests/agent.test.cjs
 ```
 
-- [ ] **步骤 3：实现分层实机验证**
+- [x] **步骤 3：实现分层实机验证**
 
 更新 `win-verify.cjs`，分别输出：
 
@@ -268,14 +268,14 @@ node tests/agent.test.cjs
 脚本自身通过 `spawnSync` 执行 CLI 时必须包含有限超时和
 `windowsHide: true`。最终只在所有层通过时输出成功。
 
-- [ ] **步骤 4：运行测试与语法检查**
+- [x] **步骤 4：运行测试与语法检查**
 
 ```bash
 node tests/agent.test.cjs
 node --check plugin/win-verify.cjs
 ```
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```bash
 git add -f plugin/win-verify.cjs tests/agent.test.cjs
@@ -288,11 +288,11 @@ git commit -m "test(plugin): verify complete Windows self-update chain"
 
 - 修改：`plugin/.claude-plugin/plugin.json`
 
-- [ ] **步骤 1：更新版本**
+- [x] **步骤 1：更新版本**
 
 将插件版本从 `1.4.13` 更新为 `1.4.14`，让已安装的 `1.4.12` 能真实下载新缓存。
 
-- [ ] **步骤 2：执行全量验证**
+- [x] **步骤 2：执行全量验证**
 
 ```bash
 node tests/agent.test.cjs
@@ -305,14 +305,14 @@ git diff --check
 
 预期：全部测试通过、所有语法检查退出码为零、`git diff --check` 无输出。
 
-- [ ] **步骤 3：提交版本**
+- [x] **步骤 3：提交版本**
 
 ```bash
 git add -f plugin/.claude-plugin/plugin.json
 git commit -m "chore(plugin): release silent self-update as 1.4.14"
 ```
 
-- [ ] **步骤 4：生成 Windows 用户验收命令**
+- [x] **步骤 4：生成 Windows 用户验收命令**
 
 命令必须是一整块 PowerShell，可自动：
 

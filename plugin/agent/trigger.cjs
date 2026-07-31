@@ -15,7 +15,7 @@ function ensureWindowsCodexTrigger(opts = {}) {
 }
 
 // macOS: 校验两个 plist（每小时 + WatchPaths）是否存在且包含 --trigger；否则重写
-function ensureMacosCodexTrigger({ log = () => {} } = {}) {
+function ensureMacosCodexTrigger({ log = () => {}, strict = false } = {}) {
   if (process.platform !== "darwin") return;
   const labelBase = "com.dgcrane.vantage.codex";
   const dir = path.join(os.homedir(), "Library", "LaunchAgents");
@@ -43,11 +43,12 @@ function ensureMacosCodexTrigger({ log = () => {} } = {}) {
     log("✓ macOS Codex 触发器已自检修复（每小时 + WatchPaths）");
   } catch (e) {
     log(`! macOS Codex 触发器自检失败：${e.message}`);
+    if (strict) throw e;
   }
 }
 
 // Linux: 校验 timer 是否为每小时 + Persistent；否则重写
-function ensureLinuxCodexTrigger({ log = () => {} } = {}) {
+function ensureLinuxCodexTrigger({ log = () => {}, strict = false } = {}) {
   if (process.platform !== "linux") return;
   const timerPath = path.join(os.homedir(), ".config", "systemd", "user", "vantage-codex.timer");
   if (fs.existsSync(timerPath)) {
@@ -64,6 +65,7 @@ function ensureLinuxCodexTrigger({ log = () => {} } = {}) {
     log("✓ Linux Codex 触发器已自检修复（每小时 + Persistent）");
   } catch (e) {
     log(`! Linux Codex 触发器自检失败：${e.message}`);
+    if (strict) throw e;
   }
 }
 

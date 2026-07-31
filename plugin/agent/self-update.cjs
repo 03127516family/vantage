@@ -277,6 +277,7 @@ function runOfficialUpdate(options = {}) {
     { phase: "marketplace", args: ["plugin", "marketplace", "update", marketplace] },
     { phase: "plugin", args: ["plugin", "update", pluginId] },
   ];
+  const evidence = [];
   for (const step of steps) {
     const invocation = cliInvocation(step.args, platform);
     let result;
@@ -291,17 +292,22 @@ function runOfficialUpdate(options = {}) {
     } catch (e) {
       result = { status: null, error: e, stdout: "", stderr: String(e.message || e) };
     }
+    const stepEvidence = {
+      phase: step.phase,
+      status: result?.status ?? null,
+      timedOut: result?.error?.code === "ETIMEDOUT",
+      outputTail: outputTail(result),
+    };
+    evidence.push(stepEvidence);
     if (result?.status !== 0 || result?.error) {
       return {
         ok: false,
-        phase: step.phase,
-        status: result?.status ?? null,
-        timedOut: result?.error?.code === "ETIMEDOUT",
-        outputTail: outputTail(result),
+        ...stepEvidence,
+        steps: evidence,
       };
     }
   }
-  return { ok: true, phase: "complete", status: 0, outputTail: "" };
+  return { ok: true, phase: "complete", status: 0, outputTail: "", steps: evidence };
 }
 
 /** 完整闭环：官方更新成功后，激活生效缓存并使用新代码修复触发器。 */
@@ -317,7 +323,7 @@ function runUpdateAndActivate(options = {}) {
     options.repairTriggers ||
     (() => {
       const trigger = require(path.join(stableDir, "trigger.cjs"));
-      trigger.ensureCodexTriggers({ log: writeLog });
+      trigger.ensureCodexTriggers({ log: writeLog, strict: true });
     });
   const lock = acquireUpdateLock(home);
   if (!lock) {
@@ -370,10 +376,17 @@ module.exports = {
   runUpdateAndActivate,
 };
 
-if (require.main === module && process.argv.includes("--check")) {
-  try {
-    runUpdateAndActivate();
-  } catch {
-    // 后台更新永远静默退出，错误已由 runUpdateAndActivate 写入日志。
+if (require.main === module) {
+  const probeIndex = process.argv.indexOf("--probe");
+  if (probeIndex >= 0 && process.argv[probeIndex + 1]) {
+    try {
+      fs.writeFileSync(process.argv[probeIndex + 1], "vantage-self-update-ok\n");
+    } catch {}
+  } else if (process.argv.includes("--check")) {
+    try {
+      runUpdateAndActivate();
+    } catch {
+      // 后台更新永远静默退出，错误已由 runUpdateAndActivate 写入日志。
+    }
   }
 }

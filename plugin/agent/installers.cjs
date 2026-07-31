@@ -264,9 +264,10 @@ function isValidHourlyTaskXml(xml, runVbs) {
 }
 
 // Windows: 登录自启(启动文件夹 VBS) + 每小时计划任务(StartWhenAvailable 错过补跑)
-function installWindowsCodexTrigger({ log = () => {} } = {}) {
+function installWindowsCodexTrigger({ log = () => {}, strict = false } = {}) {
   if (process.platform !== "win32" || process.env.VANTAGE_SKIP_TRIGGER === "1") return;
   const baseDir = path.join(os.homedir(), ".vantage");
+  const errors = [];
   fs.mkdirSync(baseDir, { recursive: true });
   const body = vbsBody(process.execPath, path.join(baseDir, "agent", "reconcile.cjs"));
 
@@ -282,6 +283,7 @@ function installWindowsCodexTrigger({ log = () => {} } = {}) {
       }
     } catch (e) {
       log(`! Codex 触发器(${label})写入失败:${e.message}`);
+      errors.push(`${label}写入失败:${e.message}`);
     }
   }
 
@@ -324,6 +326,7 @@ function installWindowsCodexTrigger({ log = () => {} } = {}) {
       } catch (e2) {
         log("! Codex XML 任务创建失败，已回退到每小时命令行任务：" + e.message);
         log("! 无法保证 StartWhenAvailable，建议手动检查：" + e2.message);
+        errors.push(`XML 任务修复失败:${e2.message}`);
       }
     }
   }
@@ -335,6 +338,9 @@ function installWindowsCodexTrigger({ log = () => {} } = {}) {
     } catch {
       /* 不存在或无权删，均忽略 */
     }
+  }
+  if (strict && errors.length) {
+    throw new Error(errors.join("; "));
   }
 }
 

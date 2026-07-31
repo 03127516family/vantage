@@ -672,6 +672,11 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
         });
         ok(updated.ok === true && calls.length === 2, "官方更新两步均成功");
         ok(
+          Array.isArray(updated.steps) &&
+            updated.steps.map((step) => step.phase).join(",") === "marketplace,plugin",
+          "官方更新分别保留 marketplace 与 plugin 两阶段证据"
+        );
+        ok(
           calls[0].args.join(" ").includes("plugin marketplace update dgcrane"),
           "先执行 marketplace update"
         );
@@ -782,6 +787,14 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
           /spawnNodeHidden/.test(reconcileUpdateSource),
         "reconcile 使用同一更新锁、哈希同步和隐藏稳定更新器"
       );
+      const updaterSource = fs.readFileSync(path.join(AGENT, "self-update.cjs"), "utf8");
+      const triggerSource = fs.readFileSync(path.join(AGENT, "trigger.cjs"), "utf8");
+      ok(
+        /strict:\s*true/.test(updaterSource) &&
+          /strict/.test(triggerSource) &&
+          /throw/.test(triggerSource),
+        "更新事务使用严格触发器修复，失败可回滚"
+      );
 
       const verifySource = fs.readFileSync(path.join(ROOT, "win-verify.cjs"), "utf8");
       ok(
@@ -800,6 +813,22 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
         "Windows 实机验证完整哈希和生产激活逻辑"
       );
       ok(/schtasks/.test(verifySource), "Windows 实机验证真实运行并查询计划任务");
+      ok(
+        verifySource.includes("spawnNodeHidden") &&
+          verifySource.includes("vantage-self-update.vbs"),
+        "Windows 实机验证真实生产自更新 VBS 路径"
+      );
+      ok(
+        /plugin\.json/.test(verifySource) &&
+          /expectedVersion/.test(verifySource),
+        "Windows 实机验证默认锁定随脚本发布的目标版本"
+      );
+      ok(
+        /LastRunTime/.test(verifySource) &&
+          /LastTaskResult/.test(verifySource) &&
+          /lastRunAdvanced/.test(verifySource),
+        "Windows 实机验证等待本次任务完成并断言结果"
+      );
     }
   }
 

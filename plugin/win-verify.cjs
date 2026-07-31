@@ -73,8 +73,20 @@ function tailText(value, lines = 4) {
 console.log("== Vantage Windows 无感自更新实机验证 ==");
 const home = os.homedir();
 const pluginId = "vantage@dgcrane";
-const expectedVersion = process.env.VANTAGE_EXPECT_VERSION || "";
+const bundledManifest = JSON.parse(
+  fs.readFileSync(path.join(__dirname, ".claude-plugin", "plugin.json"), "utf8")
+);
+const expectedVersion = process.env.VANTAGE_EXPECT_VERSION || bundledManifest.version;
 const bundledUpdater = require(path.join(__dirname, "agent", "self-update.cjs"));
+
+function versionAtLeast(actual, expected) {
+  const a = String(actual).split(".").map(Number);
+  const e = String(expected).split(".").map(Number);
+  for (let i = 0; i < Math.max(a.length, e.length); i++) {
+    if ((a[i] || 0) !== (e[i] || 0)) return (a[i] || 0) > (e[i] || 0);
+  }
+  return true;
+}
 
 // ---- 1. 更新前生效记录 ----
 let before = null;
@@ -93,6 +105,16 @@ const official = bundledUpdater.runOfficialUpdate({
   platform: "win32",
   timeoutMs: 120000,
 });
+for (const phase of ["marketplace", "plugin"]) {
+  const evidence = official.steps?.find((step) => step.phase === phase);
+  ok(
+    evidence?.status === 0 && !evidence?.timedOut,
+    `官方 ${phase} update 成功`,
+    evidence
+      ? `status=${evidence.status} timeout=${evidence.timedOut ? 1 : 0} ${evidence.outputTail || ""}`
+      : "该阶段未执行"
+  );
+}
 ok(
   official.ok,
   "官方 marketplace update + plugin update 成功",
@@ -112,9 +134,11 @@ try {
   core = require(path.join(active.agentDir, "core.cjs"));
   installers = require(path.join(active.agentDir, "installers.cjs"));
   ok(true, "更新后安装记录、清单和必要文件一致", `${active.version} — ${active.installPath}`);
-  if (expectedVersion) {
-    ok(active.version === expectedVersion, `生效版本是预期的 ${expectedVersion}`, active.version);
-  }
+  ok(
+    versionAtLeast(active.version, expectedVersion),
+    `生效版本不低于随验证脚本发布的 ${expectedVersion}`,
+    active.version
+  );
 } catch (e) {
   ok(false, "更新后安装记录、清单和必要文件一致", String(e.message || e));
 }
@@ -214,9 +238,55 @@ if (core && installers) {
     markerFound = fs.existsSync(marker);
   }
   ok(!markerRun.error && markerFound, "wscript 隐藏执行全链路生成标记文件");
+
+  const updateMarker = path.join(os.tmpdir(), `vantage-update-hidden-${process.pid}.txt`);
+  try {
+    fs.unlinkSync(updateMarker);
+  } catch {}
+  const updateSpawned = core.spawnNodeHidden(
+    path.join(stableDir, "self-update.cjs"),
+    ["--probe", updateMarker]
+  );
+  let updateMarkerFound = false;
+  for (let i = 0; i < 8 && !updateMarkerFound; i++) {
+    spawnSync("cmd.exe", ["/d", "/s", "/c", "ping -n 2 127.0.0.1 >nul"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    updateMarkerFound = fs.existsSync(updateMarker);
+  }
+  const productionUpdateVbs = path.join(home, ".vantage", "vantage-self-update.vbs");
+  let productionVbsError = "文件不存在";
+  if (fs.existsSync(productionUpdateVbs)) {
+    const productionBody = decodeFile(fs.readFileSync(productionUpdateVbs));
+    productionVbsError = vbsLexCheck(
+      productionBody.split(/\r?\n/).filter(Boolean).pop() || ""
+    ).error;
+  }
+  ok(
+    updateSpawned && updateMarkerFound && !productionVbsError,
+    "生产 spawnNodeHidden / vantage-self-update.vbs 无窗执行成功",
+    productionVbsError || ""
+  );
 }
 
 // ---- 6. 真实运行并查询计划任务 ----
+const beforeTask = spawnSync(
+  "powershell.exe",
+  [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "$i=Get-ScheduledTaskInfo -TaskName 'VantageCodexHourly' -ErrorAction Stop; $i.LastRunTime.ToUniversalTime().Ticks",
+  ],
+  { encoding: "utf8", windowsHide: true, timeout: 15000 }
+);
+const beforeTicks = String(beforeTask.stdout || "").trim();
+ok(
+  beforeTask.status === 0 && /^\d+$/.test(beforeTicks),
+  "读取计划任务运行前时间",
+  tailText(beforeTask.stderr)
+);
 const taskRun = spawnSync("schtasks.exe", ["/Run", "/TN", "VantageCodexHourly"], {
   encoding: "utf8",
   windowsHide: true,
@@ -225,30 +295,37 @@ const taskRun = spawnSync("schtasks.exe", ["/Run", "/TN", "VantageCodexHourly"],
 ok(taskRun.status === 0 && !taskRun.error, "schtasks 成功启动 VantageCodexHourly", tailText(taskRun.stderr));
 const taskWaitScript = [
   "$deadline=(Get-Date).AddSeconds(30)",
+  `$before=[Int64]::Parse('${beforeTicks || "0"}')`,
   "do {",
   "  $task=Get-ScheduledTask -TaskName 'VantageCodexHourly' -ErrorAction Stop",
-  "  if ([int]$task.State -ne 4) { exit 0 }",
+  "  $info=Get-ScheduledTaskInfo -TaskName 'VantageCodexHourly' -ErrorAction Stop",
+  "  $lastRunAdvanced=$info.LastRunTime.ToUniversalTime().Ticks -gt $before",
+  "  if ($lastRunAdvanced -and [int]$task.State -ne 4) {",
+  "    @{lastRunAdvanced=$lastRunAdvanced;lastTaskResult=[int]$info.LastTaskResult;lastRunTime=$info.LastRunTime;nextRunTime=$info.NextRunTime} | ConvertTo-Json -Compress",
+  "    if ([int]$info.LastTaskResult -eq 0) { exit 0 } else { exit 2 }",
+  "  }",
   "  Start-Sleep -Milliseconds 500",
   "} while ((Get-Date) -lt $deadline)",
   "exit 1",
-].join("; ");
+].join("\r\n");
 const taskWait = spawnSync(
   "powershell.exe",
   ["-NoProfile", "-NonInteractive", "-Command", taskWaitScript],
   { encoding: "utf8", windowsHide: true, timeout: 40000 }
 );
-ok(taskWait.status === 0 && !taskWait.error, "计划任务在 30 秒内结束且没有挂起", tailText(taskWait.stderr));
-const taskInfo = spawnSync(
-  "powershell.exe",
-  [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    "Get-ScheduledTaskInfo -TaskName 'VantageCodexHourly' | Select-Object LastRunTime,LastTaskResult,NextRunTime | Format-List",
-  ],
-  { encoding: "utf8", windowsHide: true, timeout: 15000 }
+let completedTask = null;
+try {
+  completedTask = JSON.parse(String(taskWait.stdout || "").trim());
+} catch {}
+ok(
+  taskWait.status === 0 &&
+    !taskWait.error &&
+    completedTask?.lastRunAdvanced === true &&
+    completedTask?.lastTaskResult === 0,
+  "观察到本次计划任务启动、结束且 LastTaskResult=0",
+  taskWait.error?.message || tailText(taskWait.stdout || taskWait.stderr, 6)
 );
-if (taskInfo.stdout) info("计划任务状态: " + tailText(taskInfo.stdout, 6));
+if (completedTask) info("计划任务状态: " + JSON.stringify(completedTask));
 
 // ---- 7. 日志尾部 ----
 try {
