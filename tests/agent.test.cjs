@@ -961,6 +961,7 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
     const expect = [
       [path.join(AGENT, "core.cjs"), 2],
       [path.join(AGENT, "installers.cjs"), 2],
+      [path.join(AGENT, "quota.cjs"), 1],
       [path.join(ROOT, "setup.cjs"), 1],
       [path.join(ROOT, "uninstall.cjs"), 3],
     ];
@@ -1014,6 +1015,98 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
     ok(
       /pickQuota/.test(reconcileSrc) && /__quota_cache__/.test(reconcileSrc),
       "reconcile 缓存上次成功 quota 并用 pickQuota 兜底(失败/节流时每条记录仍带 quota)"
+    );
+  }
+
+  // ============================================================
+  section("13. quota 代理识别:env 优先 + Windows 系统代理");
+  {
+    const quota = require(path.join(AGENT, "quota.cjs"));
+    if (typeof quota.pickProxyFromEnv !== "function" || typeof quota.parseWinRegistryProxy !== "function") {
+      ok(false, "代理识别函数 pickProxyFromEnv / parseWinRegistryProxy 已实现");
+    } else {
+      ok(quota.pickProxyFromEnv({ HTTPS_PROXY: "http://a:1" }) === "http://a:1", "env: HTTPS_PROXY");
+      ok(
+        quota.pickProxyFromEnv({ HTTPS_PROXY: "http://a:1", HTTP_PROXY: "http://b:2" }) === "http://a:1",
+        "env: HTTPS_PROXY 优先于 HTTP_PROXY"
+      );
+      ok(quota.pickProxyFromEnv({ https_proxy: "http://a:1" }) === "http://a:1", "env: 小写也认");
+      ok(quota.pickProxyFromEnv({ HTTP_PROXY: "http://b:2" }) === "http://b:2", "env: 回退 HTTP_PROXY");
+      ok(quota.pickProxyFromEnv({ ALL_PROXY: "http://c:3" }) === "http://c:3", "env: ALL_PROXY");
+      ok(quota.pickProxyFromEnv({}) === "", "env: 无则空");
+      ok(quota.parseWinRegistryProxy({ enable: 0, server: "127.0.0.1:7890" }) === "", "reg: ProxyEnable=0 不用代理");
+      ok(
+        quota.parseWinRegistryProxy({ enable: 1, server: "127.0.0.1:7890" }) === "http://127.0.0.1:7890",
+        "reg: 简单地址自动补 http://"
+      );
+      ok(
+        quota.parseWinRegistryProxy({ enable: 1, server: "http=127.0.0.1:7890;https=127.0.0.1:7891" }) ===
+          "http://127.0.0.1:7891",
+        "reg: 多协议格式取 https 那个"
+      );
+      ok(
+        quota.parseWinRegistryProxy({ enable: 1, server: "http://x:1" }) === "http://x:1",
+        "reg: 已有 scheme 不重复加"
+      );
+      ok(quota.parseWinRegistryProxy({ enable: 1, server: "" }) === "", "reg: server 空则空");
+      ok(quota.parseWinRegistryProxy({}) === "", "reg: 无参则空");
+    }
+    if (typeof quota.readProxy !== "function") {
+      ok(false, "readProxy 已实现");
+    } else {
+      let regCalled = false;
+      ok(
+        quota.readProxy({
+          env: { HTTPS_PROXY: "http://e:1" },
+          readRegistry: () => {
+            regCalled = true;
+            return {};
+          },
+        }) === "http://e:1" && !regCalled,
+        "readProxy: env 优先,不读注册表"
+      );
+      ok(
+        quota.readProxy({
+          env: {},
+          platform: "win32",
+          readRegistry: () => ({ enable: 1, server: "127.0.0.1:7890" }),
+        }) === "http://127.0.0.1:7890",
+        "readProxy: env 空时回退 Windows 注册表"
+      );
+      ok(
+        quota.readProxy({
+          env: {},
+          platform: "win32",
+          readRegistry: () => ({ enable: 0, server: "x" }),
+        }) === "",
+        "readProxy: 注册表禁用则空"
+      );
+      ok(
+        quota.readProxy({
+          env: {},
+          platform: "darwin",
+          readRegistry: () => ({ enable: 1, server: "x" }),
+        }) === "",
+        "readProxy: 非 win32 不读注册表"
+      );
+      ok(
+        quota.readProxy({
+          env: {},
+          platform: "win32",
+          readRegistry: () => {
+            throw new Error("boom");
+          },
+        }) === "",
+        "readProxy: 注册表异常优雅返回空"
+      );
+    }
+    const quotaSrc = fs.readFileSync(path.join(AGENT, "quota.cjs"), "utf8");
+    ok(
+      /readProxy\(\)/.test(quotaSrc) &&
+        /CONNECT /.test(quotaSrc) &&
+        /net\.connect/.test(quotaSrc) &&
+        /tls\.connect/.test(quotaSrc),
+      "quota.cjs 走代理 CONNECT 隧道(readProxy + net.connect + tls.connect)"
     );
   }
 
