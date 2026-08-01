@@ -129,7 +129,7 @@ section("1. VBS 内容:引号配平 / 命令行重建 / 错误兜底");
   const pluginManifest = JSON.parse(
     fs.readFileSync(path.join(ROOT, ".claude-plugin", "plugin.json"), "utf8")
   );
-  ok(pluginManifest.version === "1.4.15", "无感自更新发布版本为 1.4.15", pluginManifest.version);
+  ok(pluginManifest.version === "1.4.16", "无感自更新发布版本为 1.4.16", pluginManifest.version);
   const cases = [
     ["标准路径", "C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\Xin Cheng\\.vantage\\agent\\reconcile.cjs"],
     ["中文用户名", "C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\张明\\.vantage\\agent\\reconcile.cjs"],
