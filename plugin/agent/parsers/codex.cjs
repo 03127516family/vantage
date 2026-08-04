@@ -199,4 +199,52 @@ function parseCodexRollout(rolloutPath) {
   };
 }
 
-module.exports = { parseCodexRollout };
+const HISTORY_MAX = 200;
+const HISTORY_KEEP = 100;
+const HISTORY_TEXT_MAX = 500;
+
+/**
+ * 从 Codex rollout 提取 user/agent 文本对话历史。
+ * 采 event_msg 的 user_message 和 agent_message;跳过 function_call/patch/state injection。
+ * 每条 text 经 redact + truncate(500)。失败返回空数组,绝不抛。
+ */
+function parseCodexHistory(rolloutPath) {
+  let content;
+  try {
+    content = fs.readFileSync(rolloutPath, "utf8");
+  } catch {
+    return [];
+  }
+  const history = [];
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!o.timestamp) continue;
+    const p = o.payload;
+    if (!p || typeof p !== "object") continue;
+    if (o.type === "event_msg" && p.type === "user_message" && typeof p.message === "string") {
+      // 跳过 Codex 注入的应用状态(以 # 开头或含特定标记)
+      if (isStateInjection(p.message)) continue;
+      const t = p.message.trim();
+      if (t) {
+        history.push({ role: "user", text: truncate(redact(t), HISTORY_TEXT_MAX), timestamp: o.timestamp });
+      }
+    } else if (o.type === "event_msg" && p.type === "agent_message" && typeof p.message === "string") {
+      const t = p.message.trim();
+      if (t) {
+        history.push({ role: "assistant", text: truncate(redact(t), HISTORY_TEXT_MAX), timestamp: o.timestamp });
+      }
+    }
+  }
+  if (history.length > HISTORY_MAX) {
+    return [...history.slice(0, HISTORY_KEEP), ...history.slice(-HISTORY_KEEP)];
+  }
+  return history;
+}
+
+module.exports = { parseCodexRollout, parseCodexHistory };

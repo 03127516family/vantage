@@ -221,4 +221,51 @@ function parseClaudeTranscript(transcriptPath) {
   };
 }
 
-module.exports = { parseClaudeTranscript };
+// HISTORY_MAX: 单个会话最多 200 条,超出时保留前 100 + 后 100(防爆体积)
+const HISTORY_MAX = 200;
+const HISTORY_KEEP = 100;
+// 单条文本截断长度(已有 redact 脱敏)
+const HISTORY_TEXT_MAX = 500;
+
+/**
+ * 从 Claude transcript 提取 user/assistant 纯文本对话历史。
+ * 只采真人提问(非 tool_result 回填) + AI 文本回复;跳过 tool_use/tool_result/thinking。
+ * 每条 text 经 redact + truncate(500) 处理。失败/文件缺失返回空数组,绝不抛。
+ */
+function parseClaudeHistory(transcriptPath) {
+  let content;
+  try {
+    content = fs.readFileSync(transcriptPath, "utf8");
+  } catch {
+    return [];
+  }
+  const history = [];
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!o.message || !o.timestamp) continue;
+    if (o.type === "user" && isHumanPrompt(o)) {
+      const t = extractText(o.message);
+      if (t && t.trim()) {
+        history.push({ role: "user", text: truncate(redact(t), HISTORY_TEXT_MAX), timestamp: o.timestamp });
+      }
+    } else if (o.type === "assistant" && o.message.role === "assistant") {
+      const t = extractText(o.message);
+      if (t && t.trim()) {
+        history.push({ role: "assistant", text: truncate(redact(t), HISTORY_TEXT_MAX), timestamp: o.timestamp });
+      }
+    }
+  }
+  // 超过上限: 保留前 100 + 后 100
+  if (history.length > HISTORY_MAX) {
+    return [...history.slice(0, HISTORY_KEEP), ...history.slice(-HISTORY_KEEP)];
+  }
+  return history;
+}
+
+module.exports = { parseClaudeTranscript, parseClaudeHistory };

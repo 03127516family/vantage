@@ -10,8 +10,8 @@ const os = require("node:os");
 const path = require("node:path");
 const core = require("./core.cjs");
 const updater = require("./self-update.cjs");
-const { parseClaudeTranscript } = require("./parsers/claude-code.cjs");
-const { parseCodexRollout } = require("./parsers/codex.cjs");
+const { parseClaudeTranscript, parseClaudeHistory } = require("./parsers/claude-code.cjs");
+const { parseCodexRollout, parseCodexHistory } = require("./parsers/codex.cjs");
 const { fetchCodexQuota, pickQuota } = require("./quota.cjs");
 
 // 只回看最近 N 天的会话，避免首次安装时把全部历史一次性灌上去
@@ -176,6 +176,25 @@ async function main() {
   core.ensureDirs();
   const cfg = core.loadConfig();
 
+  // 补报 /install: setup 时后台异步可能失败(断网/服务器挂),这里在每次 reconcile 启动时
+  // 检查 state 标记,未上报则补报一次(成功才置位)。失败写日志,不阻塞主流程。
+  try {
+    const state = core.readState();
+    if (!state.__install_reported__ && cfg.name) {
+      const base = String(cfg.server_url).replace(/\/+$/, "");
+      const status = await core.postJsonUrl(`${base}/install`, cfg.token, { name: cfg.name });
+      if (status >= 200 && status < 300) {
+        state.__install_reported__ = true;
+        core.writeState(state);
+        core.log(`install 补报成功 name=${cfg.name}`);
+      } else {
+        core.log(`install 补报失败 status=${status}(下轮重试)`);
+      }
+    }
+  } catch (e) {
+    core.log(`install 补报异常(已忽略):${e.message}`);
+  }
+
   const args = parseArgs(process.argv);
   const sources = args.only ? SOURCES.filter((s) => s.tool === args.only) : SOURCES;
 
@@ -263,6 +282,9 @@ async function main() {
   // 若被 --only 单源扫描按安装闸口剪掉，后续身份变更就无从知道它该重传。
   core.pruneState(recentCutoff);
 
+  // 采集级别: full 时给本轮扫描的所有记录带 history。失败沿用上次值,不阻塞。
+  const collectLevel = await core.fetchCollectLevel(cfg);
+
   // Codex 账户额度（wham/usage）：Codex 专用扫描（--only codex）和全量 reconcile（含 codex 源）都拉。
   // 专用扫描与定时任务同节流（30min/5min）；全量 reconcile 单独 30min 节流，避免每次开会话都调 wham。
   // 结果贴到当轮所有 Codex 记录；失败→null→记录不带 quota，服务端粘性沿用。
@@ -331,6 +353,14 @@ async function main() {
       };
       // 额度只贴 Codex（wham 是 OpenAI 账户额度；Claude Code 不沾）。
       if (parsed.tool === "codex" && codexQuota) record.quota = codexQuota;
+      // full 级别: 给记录带 history
+      if (collectLevel === "full") {
+        try {
+          record.history = src.tool === "codex" ? parseCodexHistory(file) : parseClaudeHistory(file);
+        } catch (e) {
+          core.log(`parse history failed for ${file} (ignored): ${e.message}`);
+        }
+      }
       core.writeSpool(record);
       core.markProcessed(file, st.size, st.mtimeMs);
       swept += 1;

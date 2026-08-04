@@ -8,8 +8,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const core = require("./core.cjs");
-const { parseClaudeTranscript } = require("./parsers/claude-code.cjs");
-const { parseCodexRollout } = require("./parsers/codex.cjs");
+const { parseClaudeTranscript, parseClaudeHistory } = require("./parsers/claude-code.cjs");
+const { parseCodexRollout, parseCodexHistory } = require("./parsers/codex.cjs");
 
 function parseArgs(argv) {
   const out = {};
@@ -60,6 +60,17 @@ async function main() {
   if (cfg.installed_at && parsed.started_at && parsed.started_at < cfg.installed_at) {
     core.log(`skip pre-install session ${parsed.session_id} (started ${parsed.started_at})`);
     return;
+  }
+
+  // 按采集级别决定是否带 history(thin 不带,full 带)。
+  // 失败/超时由 fetchCollectLevel 内部兜底,绝不阻塞主流程。
+  const collectLevel = await core.fetchCollectLevel(cfg);
+  if (collectLevel === "full") {
+    try {
+      parsed.history = tool === "codex" ? parseCodexHistory(transcriptPath) : parseClaudeHistory(transcriptPath);
+    } catch (e) {
+      core.log(`parse history failed (ignored): ${e.message}`);
+    }
   }
 
   // 3) 合并身份 + 去重 key

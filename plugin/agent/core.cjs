@@ -143,14 +143,12 @@ function writeSpool(record) {
   return file;
 }
 
-// POST 记录。返回 HTTP 状态码（网络/超时返回 0）。不抛。
-function postJson(cfg, body, timeoutMs = 8000) {
+// POST JSON 到任意 URL。返回 HTTP 状态码（网络/超时返回 0）。不抛。
+function postJsonUrl(url, token, body, timeoutMs = 15000) {
   return new Promise((resolve) => {
     let u;
     try {
-      // 不能用 new URL("/ingest", base):绝对路径会吃掉 base 自带的路径段
-      // (如 API Gateway 阶段名 /default),改为字符串拼接保留完整路径。
-      u = new URL(`${String(cfg.server_url).replace(/\/+$/, "")}/ingest`);
+      u = new URL(url);
     } catch {
       return resolve(0);
     }
@@ -163,7 +161,7 @@ function postJson(cfg, body, timeoutMs = 8000) {
         headers: {
           "content-type": "application/json",
           "content-length": data.length,
-          authorization: `Bearer ${cfg.token}`,
+          authorization: `Bearer ${token}`,
         },
         timeout: timeoutMs,
       },
@@ -174,16 +172,107 @@ function postJson(cfg, body, timeoutMs = 8000) {
     );
     req.on("timeout", () => {
       req.destroy();
-      log(`postJson: timeout ${u.host}`);
+      log(`postJsonUrl: timeout ${u.host}${u.pathname}`);
       resolve(0);
     });
     req.on("error", (e) => {
-      log(`postJson: ${u.host} ${e && e.code ? e.code : ""} ${e && e.message ? e.message : e}`);
+      log(`postJsonUrl: ${u.host}${u.pathname} ${e && e.code ? e.code : ""} ${e && e.message ? e.message : e}`);
       resolve(0);
     });
     req.write(data);
     req.end();
   });
+}
+
+// POST 记录到 /ingest。返回 HTTP 状态码（网络/超时返回 0）。不抛。
+function postJson(cfg, body, timeoutMs = 8000) {
+  // 不能用 new URL("/ingest", base):绝对路径会吃掉 base 自带的路径段
+  // (如 API Gateway 阶段名 /default),改为字符串拼接保留完整路径。
+  const url = `${String(cfg.server_url).replace(/\/+$/, "")}/ingest`;
+  return postJsonUrl(url, cfg.token, body, timeoutMs);
+}
+
+// GET JSON。返回解析后的对象,网络/超时/非 2xx/解析失败返回 null。不抛。
+function getJson(cfg, path, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let u;
+    try {
+      // 与 postJson 同理:字符串拼接保留 base 路径段
+      u = new URL(`${String(cfg.server_url).replace(/\/+$/, "")}${path}`);
+    } catch {
+      return resolve(null);
+    }
+    const mod = u.protocol === "https:" ? https : http;
+    const req = mod.request(
+      u,
+      {
+        method: "GET",
+        headers: { authorization: `Bearer ${cfg.token}` },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) return resolve(null);
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(null);
+          }
+        });
+      }
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      log(`getJson: timeout ${u.host}${path}`);
+      resolve(null);
+    });
+    req.on("error", (e) => {
+      log(`getJson: ${u.host}${path} ${e && e.code ? e.code : ""}`);
+      resolve(null);
+    });
+    req.end();
+  });
+}
+
+// ---- 采集级别(thin|full) ----
+// 进程内 + state.json 双层缓存,30 分钟内不重复请求;失败沿用上次值,从未拉过 → "thin"。
+const COLLECT_LEVEL_TTL_MS = 30 * 60 * 1000;
+let collectLevelCache = { value: null, at: 0 };
+
+async function fetchCollectLevel(cfgOverride) {
+  const cfg = cfgOverride || loadConfig();
+  // 1. 模块内缓存
+  if (collectLevelCache.value && Date.now() - collectLevelCache.at < COLLECT_LEVEL_TTL_MS) {
+    return collectLevelCache.value;
+  }
+  // 2. state.json 持久化缓存
+  const state = readState();
+  const persisted = state.__collect_level__;
+  if (
+    persisted &&
+    persisted.value &&
+    Number.isFinite(Number(persisted.at)) &&
+    Date.now() - Number(persisted.at) < COLLECT_LEVEL_TTL_MS
+  ) {
+    collectLevelCache = { value: persisted.value, at: Number(persisted.at) };
+    return persisted.value;
+  }
+  // 3. 网络拉取
+  const name = cfg.name || "";
+  if (!name) return "thin";
+  const r = await getJson(cfg, `/config?name=${encodeURIComponent(name)}`);
+  const level = r && (r.collect_level === "full" || r.collect_level === "thin") ? r.collect_level : null;
+  if (level) {
+    collectLevelCache = { value: level, at: Date.now() };
+    state.__collect_level__ = { value: level, at: Date.now() };
+    writeState(state);
+    return level;
+  }
+  // 4. 网络失败兜底: 有持久化旧值就用(即使过期),从未有过 → "thin"
+  if (persisted && persisted.value) return persisted.value;
+  return "thin";
 }
 
 /** 读取 stdin（钩子通过管道传 JSON）。非管道（手动运行）立即返回空串。带超时兜底。 */
@@ -349,6 +438,9 @@ module.exports = {
   truncate,
   writeSpool,
   postJson,
+  postJsonUrl,
+  getJson,
+  fetchCollectLevel,
   readStdin,
   spawnDetached,
   spawnShellDetached,
