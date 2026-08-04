@@ -129,7 +129,7 @@ section("1. VBS 内容:引号配平 / 命令行重建 / 错误兜底");
   const pluginManifest = JSON.parse(
     fs.readFileSync(path.join(ROOT, ".claude-plugin", "plugin.json"), "utf8")
   );
-  ok(pluginManifest.version === "1.4.16", "无感自更新发布版本为 1.4.16", pluginManifest.version);
+  ok(pluginManifest.version === "1.5.0", "无感自更新发布版本为 1.5.0", pluginManifest.version);
   const cases = [
     ["标准路径", "C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\Xin Cheng\\.vantage\\agent\\reconcile.cjs"],
     ["中文用户名", "C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\张明\\.vantage\\agent\\reconcile.cjs"],
@@ -428,8 +428,12 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
     fl = await runSandboxA(path.join(AGENT, "flush.cjs"), [], home);
   }
   ok(fl.status === 0, "flush exit 0", fl.stderr);
-  ok(received.length === 2, `stub 服务器收到 2 条 POST`, String(received.length));
-  ok(received.every((r) => r.url === "/ingest"), "POST 路径 /ingest");
+  // flush 现在还会顺手补报 /install(测试沙箱里 config.name="测试员",state 无 __install_reported__)。
+  // 所以总请求 = 2 条 /ingest + 1 条 /install。
+  const ingestCalls = received.filter((r) => r.url === "/ingest");
+  const installCalls7 = received.filter((r) => r.url === "/install");
+  ok(ingestCalls.length === 2, `stub 服务器收到 2 条 /ingest`, String(ingestCalls.length));
+  ok(installCalls7.length === 1, `stub 服务器收到 1 条 /install(顺手补报)`, String(installCalls7.length));
   ok(received.every((r) => r.auth === "Bearer t"), "Authorization 头正确");
   ok(received.some((r) => r.body.tool === "claude-code" && r.body.session_id === "sess-aaa"), "收到 claude 记录");
   ok(received.some((r) => r.body.tool === "codex" && r.body.session_id === "codex-bbb"), "收到 codex 记录");
@@ -980,6 +984,25 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
         }
       }
     }
+    // 新增 HTTP 函数 (getJson/postJsonUrl/postJsonAsync/fetchCollectLevel) 不得派生子进程:
+    // 它们只是 HTTP 请求,出现 spawn/exec 就是 bug。
+    const httpFiles = [
+      path.join(AGENT, "core.cjs"),
+      path.join(ROOT, "setup.cjs"),
+      path.join(AGENT, "reconcile.cjs"),
+    ];
+    for (const file of httpFiles) {
+      const src = fs.readFileSync(file, "utf8");
+      // 抓 HTTP 函数体内部:函数名到下一个顶层 function/导出 之间
+      for (const fnName of ["getJson", "postJsonUrl", "postJsonAsync", "fetchCollectLevel", "checkRosterApi", "nearbyRosterApi"]) {
+        const fnStart = src.indexOf(`function ${fnName}`);
+        if (fnStart < 0) continue;
+        const fnEnd = src.indexOf("\nfunction ", fnStart + 1);
+        const body = src.slice(fnStart, fnEnd > 0 ? fnEnd : undefined);
+        ok(!/\b(spawn|execSync|execFileSync|spawnSync|execFile)\s*\(/.test(body),
+           `${path.basename(file)}: ${fnName} 不派生子进程`);
+      }
+    }
   }
 
   // ============================================================
@@ -1108,6 +1131,422 @@ section("7. 端到端:reconcile 采集 -> spool -> flush 上传到 stub 服务�
         /tls\.connect/.test(quotaSrc),
       "quota.cjs 走代理 CONNECT 隧道(readProxy + net.connect + tls.connect)"
     );
+  }
+
+  // ============================================================
+  section("14. core.cjs getJson: 发起 GET 请求(带超时与错误兜底)");
+  {
+    const core = require(path.join(AGENT, "core.cjs"));
+    ok(typeof core.getJson === "function", "core.getJson 已导出");
+
+    // stub 服务器返 JSON
+    const srv = http.createServer((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ collect_level: "full" }));
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const port = srv.address().port;
+    const cfg = { server_url: `http://127.0.0.1:${port}`, token: "tok" };
+    const r = await core.getJson(cfg, "/config?name=张三");
+    ok(r && r.collect_level === "full", "getJson 解析响应", JSON.stringify(r));
+    srv.close();
+
+    // 服务器不可达 → null (不抛)
+    const bad = await core.getJson({ server_url: "http://127.0.0.1:9", token: "t" }, "/config");
+    ok(bad === null, "网络不可达 → null");
+  }
+
+  section("15. core.cjs fetchCollectLevel(只读缓存) + refreshCollectLevel(真发 HTTP)");
+  {
+    const home = mkhome();
+    const vantageDir = path.join(home, ".vantage");
+    fs.mkdirSync(vantageDir, { recursive: true });
+
+    let callCount = 0;
+    const srv = http.createServer((req, res) => {
+      callCount++;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ collect_level: "full" }));
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const port = srv.address().port;
+    fs.writeFileSync(
+      path.join(vantageDir, "config.json"),
+      JSON.stringify({ name: "张三", department: "技术部", server_url: `http://127.0.0.1:${port}`, token: "t" })
+    );
+
+    // 沙箱 HOME 里 fresh require core
+    const origHome = process.env.HOME;
+    process.env.HOME = home;
+    delete require.cache[require.resolve(path.join(AGENT, "core.cjs"))];
+    const core = require(path.join(AGENT, "core.cjs"));
+
+    // fetchCollectLevel 只读缓存:首次缓存空,立即返回 thin,不发 HTTP
+    const lv1 = core.fetchCollectLevel();
+    ok(lv1 === "thin", "fetchCollectLevel 首次:立即返回 thin", String(lv1));
+    ok(callCount === 0, "fetchCollectLevel 不发 HTTP", String(callCount));
+
+    // refreshCollectLevel 真发 HTTP,写入缓存
+    const refreshed = await core.refreshCollectLevel();
+    ok(refreshed === true, "refreshCollectLevel 成功", String(refreshed));
+    ok(callCount === 1, "refreshCollectLevel 发了 1 次 HTTP", String(callCount));
+
+    // 现在 fetchCollectLevel 返回缓存的 full
+    const lv2 = core.fetchCollectLevel();
+    ok(lv2 === "full", "refreshCollectLevel 后 fetchCollectLevel 拿到 full", String(lv2));
+
+    // 缓存仍新鲜 → refreshCollectLevel 跳过 HTTP
+    const ref2 = await core.refreshCollectLevel();
+    ok(ref2 === true, "缓存新鲜时 refreshCollectLevel 返回 true(跳过)");
+    ok(callCount === 1, "缓存新鲜时不重复发 HTTP", String(callCount));
+
+    // 网络失败时:有持久化缓存则用旧值
+    srv.close();
+    delete require.cache[require.resolve(path.join(AGENT, "core.cjs"))];
+    const core2 = require(path.join(AGENT, "core.cjs"));
+    const lv3 = core2.fetchCollectLevel();
+    ok(lv3 === "full", "网络断了,fetchCollectLevel 沿用持久化缓存的旧值", String(lv3));
+
+    // 完全无缓存 + 网络失败 → "thin"
+    const home2 = mkhome();
+    fs.mkdirSync(path.join(home2, ".vantage"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home2, ".vantage", "config.json"),
+      JSON.stringify({ name: "李四", server_url: "http://127.0.0.1:9", token: "t" })
+    );
+    process.env.HOME = home2;
+    delete require.cache[require.resolve(path.join(AGENT, "core.cjs"))];
+    const core3 = require(path.join(AGENT, "core.cjs"));
+    const lv4 = core3.fetchCollectLevel();
+    ok(lv4 === "thin", "无缓存 + 网络失败 → thin", String(lv4));
+    // 显式 refresh 也失败,不抛
+    const ref3 = await core3.refreshCollectLevel();
+    ok(ref3 === false, "refresh 失败 → false(不抛)", String(ref3));
+
+    process.env.HOME = origHome;
+  }
+
+  section("15b. core.cjs postJsonUrl: 任意路径 POST");
+  {
+    delete require.cache[require.resolve(path.join(AGENT, "core.cjs"))];
+    const core = require(path.join(AGENT, "core.cjs"));
+    ok(typeof core.postJsonUrl === "function", "core.postJsonUrl 已导出");
+
+    const received = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        received.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(body || "{}") });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{}");
+      });
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const port = srv.address().port;
+    const status = await core.postJsonUrl(`http://127.0.0.1:${port}/install`, "tok", { name: "张三" });
+    ok(status === 200, "postJsonUrl 200", String(status));
+    ok(received.length === 1 && received[0].url === "/install", "POST 到 /install");
+    ok(received[0].auth === "Bearer tok", "Authorization 头");
+    ok(received[0].body.name === "张三", "body 正确");
+    srv.close();
+  }
+
+  section("16. parsers parseHistory: 提取 user/assistant 文本对话");
+  {
+    const { parseClaudeHistory } = require(path.join(AGENT, "parsers", "claude-code.cjs"));
+    const { parseCodexHistory } = require(path.join(AGENT, "parsers", "codex.cjs"));
+    ok(typeof parseClaudeHistory === "function", "parseClaudeHistory 已导出");
+    ok(typeof parseCodexHistory === "function", "parseCodexHistory 已导出");
+
+    // Claude transcript 夹具
+    const home = mkhome();
+    const transcript = path.join(home, "sess.jsonl");
+    fs.writeFileSync(
+      transcript,
+      [
+        JSON.stringify({ type: "user", timestamp: "2026-08-01T10:00:00Z", message: { role: "user", content: "怎么优化这个 SQL 邮箱 a@b.com" } }),
+        JSON.stringify({ type: "assistant", timestamp: "2026-08-01T10:00:30Z", message: { role: "assistant", content: [
+          { type: "text", text: "可以用 CTE 重写" },
+          { type: "tool_use", name: "Edit", input: { file_path: "/x" } },
+        ] } }),
+        JSON.stringify({ type: "user", timestamp: "2026-08-01T10:01:00Z", message: { role: "user", content: [
+          { type: "tool_result", content: "工具结果,不应入 history" },
+        ] } }),
+        JSON.stringify({ type: "user", timestamp: "2026-08-01T10:02:00Z", message: { role: "user", content: "好的谢谢" } }),
+      ].join("\n") + "\n"
+    );
+    const h = parseClaudeHistory(transcript);
+    ok(Array.isArray(h), "返回数组");
+    ok(h.length === 3, "过滤 tool_use/tool_result 后 3 条", String(h.length));
+    ok(h[0].role === "user", "第 1 条是 user 提问");
+    ok(h[0].text.includes("[email]"), "邮箱已脱敏", h[0].text);
+    ok(h[1].role === "assistant" && h[1].text === "可以用 CTE 重写", "assistant 文本");
+    ok(h[2].role === "user" && h[2].text === "好的谢谢", "最后一条 user");
+
+    // Codex rollout 夹具
+    const rollout = path.join(home, "rollout.jsonl");
+    fs.writeFileSync(
+      rollout,
+      [
+        JSON.stringify({ timestamp: "2026-08-01T10:00:00Z", type: "session_meta", payload: { id: "s1" } }),
+        JSON.stringify({ timestamp: "2026-08-01T10:00:01Z", type: "event_msg", payload: { type: "user_message", message: "写个脚本" } }),
+        JSON.stringify({ timestamp: "2026-08-01T10:00:30Z", type: "event_msg", payload: { type: "agent_message", message: "好" } }),
+        JSON.stringify({ timestamp: "2026-08-01T10:01:00Z", type: "response_item", payload: { type: "function_call", name: "shell" } }),
+        JSON.stringify({ timestamp: "2026-08-01T10:02:00Z", type: "event_msg", payload: { type: "user_message", message: "再改一下" } }),
+      ].join("\n") + "\n"
+    );
+    const hc = parseCodexHistory(rollout);
+    ok(hc.length === 3, "codex history 3 条", String(hc.length));
+    ok(hc[0].role === "user" && hc[0].text === "写个脚本", "codex user 消息");
+    ok(hc[1].role === "assistant" && hc[1].text === "好", "codex agent 消息");
+
+    // 文件不存在 → 空数组(不抛)
+    const hBad = parseClaudeHistory("/nonexistent/path");
+    ok(Array.isArray(hBad) && hBad.length === 0, "文件缺失 → 空数组");
+
+    // 空文本跳过: user 消息只含空白 → 不入 history
+    const transcript2 = path.join(home, "sess-empty.jsonl");
+    fs.writeFileSync(
+      transcript2,
+      [
+        JSON.stringify({ type: "user", timestamp: "2026-08-01T10:00:00Z", message: { role: "user", content: "   " } }),
+        JSON.stringify({ type: "user", timestamp: "2026-08-01T10:01:00Z", message: { role: "user", content: "真实问题" } }),
+      ].join("\n") + "\n"
+    );
+    const h2 = parseClaudeHistory(transcript2);
+    ok(h2.length === 1 && h2[0].text === "真实问题", "空白消息被跳过");
+  }
+
+  section("17. capture/reconcile 按 collect_level 决定是否带 history");
+  {
+    // 沙箱: collect_level=full,开一个 Claude 会话,capture 应带 history
+    const home = mkhome();
+    const vantageDir = path.join(home, ".vantage");
+    fs.mkdirSync(vantageDir, { recursive: true });
+
+    // 服务端 stub: /config 返 full, /ingest 接收
+    const srv = http.createServer((req, res) => {
+      if (req.url.startsWith("/config")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ collect_level: "full" }));
+      } else {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{}");
+      }
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const port = srv.address().port;
+
+    const installedAt = new Date(Date.now() - 86400e3).toISOString();
+    fs.writeFileSync(
+      path.join(vantageDir, "config.json"),
+      JSON.stringify({
+        name: "张三",
+        department: "技术部",
+        server_url: `http://127.0.0.1:${port}`,
+        token: "t",
+        installed_at: installedAt,
+      })
+    );
+    // 预热 collect_level 缓存:生产上首次调用返回 thin(后台刷新),测试直接写入
+    // 持久化缓存,模拟"管理员已把张三标为 full,且插件已经刷新过缓存"的状态。
+    fs.writeFileSync(
+      path.join(vantageDir, "state.json"),
+      JSON.stringify({ __collect_level__: { value: "full", at: Date.now() } })
+    );
+
+    const projDir = path.join(home, ".claude", "projects", "p1");
+    fs.mkdirSync(projDir, { recursive: true });
+    const transcript = path.join(projDir, "sess-full.jsonl");
+    const t1 = new Date(Date.now() - 3600e3).toISOString();
+    const t2 = new Date(Date.now() - 3000e3).toISOString();
+    fs.writeFileSync(
+      transcript,
+      [
+        JSON.stringify({ sessionId: "sess-full", cwd: "/proj", timestamp: t1, type: "user", message: { role: "user", content: "写排序" } }),
+        JSON.stringify({ sessionId: "sess-full", timestamp: t2, type: "assistant", message: { model: "claude-sonnet-5", role: "assistant", content: [{ type: "text", text: "好的" }], usage: { input_tokens: 10, output_tokens: 5 } } }),
+      ].join("\n") + "\n"
+    );
+
+    // capture 走 SessionEnd 钩子(stdin 传 transcript_path)
+    const hookInput = JSON.stringify({ transcript_path: transcript, exit_reason: "user_exit" });
+    const cap = await runSandboxA(path.join(AGENT, "capture.cjs"), [], home, {}, hookInput);
+    ok(cap.status === 0, "capture exit 0", cap.stderr);
+
+    const spooled = fs.readdirSync(path.join(vantageDir, "spool")).filter((f) => f.endsWith(".json"));
+    ok(spooled.length === 1, "落 spool 1 条", JSON.stringify(spooled));
+    const rec = JSON.parse(fs.readFileSync(path.join(vantageDir, "spool", spooled[0]), "utf8"));
+    ok(Array.isArray(rec.history), "full 级别: record 含 history 数组");
+    ok(rec.history.length === 2, "history 2 条", String(rec.history?.length));
+    ok(rec.history[0].role === "user" && rec.history[1].role === "assistant", "history 顺序");
+
+    srv.close();
+
+    // collect_level=thin 场景: 另起 sandbox + thin stub
+    const home2 = mkhome();
+    const vd2 = path.join(home2, ".vantage");
+    fs.mkdirSync(vd2, { recursive: true });
+    const srv2 = http.createServer((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ collect_level: "thin" }));
+    });
+    await new Promise((r) => srv2.listen(0, "127.0.0.1", r));
+    const port2 = srv2.address().port;
+    fs.writeFileSync(
+      path.join(vd2, "config.json"),
+      JSON.stringify({
+        name: "李四",
+        department: "技术部",
+        server_url: `http://127.0.0.1:${port2}`,
+        token: "t",
+        installed_at: installedAt,
+      })
+    );
+    const projDir2 = path.join(home2, ".claude", "projects", "p1");
+    fs.mkdirSync(projDir2, { recursive: true });
+    const transcript2 = path.join(projDir2, "sess-thin.jsonl");
+    fs.writeFileSync(
+      transcript2,
+      [
+        JSON.stringify({ sessionId: "sess-thin", cwd: "/proj", timestamp: t1, type: "user", message: { role: "user", content: "写排序" } }),
+        JSON.stringify({ sessionId: "sess-thin", timestamp: t2, type: "assistant", message: { model: "claude-sonnet-5", role: "assistant", content: [{ type: "text", text: "好" }], usage: { input_tokens: 10, output_tokens: 5 } } }),
+      ].join("\n") + "\n"
+    );
+    const hookInput2 = JSON.stringify({ transcript_path: transcript2, exit_reason: "user_exit" });
+    await runSandboxA(path.join(AGENT, "capture.cjs"), [], home2, {}, hookInput2);
+    const spooled2 = fs.readdirSync(path.join(vd2, "spool")).filter((f) => f.endsWith(".json"));
+    ok(spooled2.length === 1, "thin 落 spool 1 条");
+    const rec2 = JSON.parse(fs.readFileSync(path.join(vd2, "spool", spooled2[0]), "utf8"));
+    ok(!rec2.history, "thin 级别: record 不含 history");
+    srv2.close();
+  }
+
+  section("18. setup.cjs 走 roster API + 后台调 /install");
+  {
+    // stub 服务端: /roster/check, /roster/nearby, /install
+    const installCalls = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        if (req.url.startsWith("/roster/check")) {
+          const name = new URL(req.url, "http://x").searchParams.get("name");
+          const hit = { "李栋": "外贸部", "张三": "技术部" }[name];
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(hit ? { exists: true, name, department: hit } : { exists: false }));
+        } else if (req.url.startsWith("/roster/nearby")) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ candidates: ["李栋", "李四"] }));
+        } else if (req.url === "/install" && req.method === "POST") {
+          installCalls.push(JSON.parse(body || "{}"));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: true, installed_at: new Date().toISOString() }));
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const port = srv.address().port;
+    const env = {
+      VANTAGE_SKIP_TRIGGER: "1",
+      VANTAGE_SERVER: `http://127.0.0.1:${port}`,
+      VANTAGE_TOKEN: "t",
+    };
+
+    // 在册: 走 API,部门用 API 返回
+    const h1 = mkhome();
+    const r1 = await runSandboxA(path.join(ROOT, "setup.cjs"), ["李栋"], h1, env);
+    ok(r1.status === 0, "在册姓名 → exit 0", r1.stderr + r1.stdout);
+    const c1 = JSON.parse(fs.readFileSync(path.join(h1, ".vantage", "config.json"), "utf8"));
+    ok(c1.department === "外贸部", "部门用 API 返回(外贸部)", c1.department);
+
+    // 不在册: exit 2 + 候选名
+    const h2 = mkhome();
+    const r2 = await runSandboxA(path.join(ROOT, "setup.cjs"), ["不存在"], h2, env);
+    ok(r2.status === 2, "不在册 → exit 2", String(r2.status));
+    ok(r2.stdout.includes("李栋") || r2.stdout.includes("候选") || r2.stdout.includes("不在"), "打印候选或不在册提示", r2.stdout);
+
+    // 不在册 + 手填部门 → exit 0
+    const h3 = mkhome();
+    const r3 = await runSandboxA(path.join(ROOT, "setup.cjs"), ["新员工", "技术部"], h3, env);
+    ok(r3.status === 0, "不在册 + 手填部门 → exit 0", r3.stderr + r3.stdout);
+    const c3 = JSON.parse(fs.readFileSync(path.join(h3, ".vantage", "config.json"), "utf8"));
+    ok(c3.department === "技术部", "手填部门生效");
+
+    // 等待后台 /install 上报(detached 调用,需要等一下)
+    await sleep(1500);
+    ok(installCalls.length >= 1, "后台调用了 /install", `calls=${installCalls.length}`);
+    ok(installCalls.some((c) => c.name === "李栋"), "install 上报了李栋");
+
+    srv.close();
+
+    // roster API 不可达 → 退化本地 roster.json 兜底
+    const h4 = mkhome();
+    const env4 = {
+      VANTAGE_SKIP_TRIGGER: "1",
+      VANTAGE_SERVER: "http://127.0.0.1:9", // 不可达
+      VANTAGE_TOKEN: "t",
+    };
+    const r4 = await runSandboxA(path.join(ROOT, "setup.cjs"), ["李栋"], h4, env4);
+    ok(r4.status === 0, "API 不可达 + 本地 roster 兜底 → exit 0", r4.stderr + r4.stdout);
+    const c4 = JSON.parse(fs.readFileSync(path.join(h4, ".vantage", "config.json"), "utf8"));
+    ok(c4.department === "外贸部", "本地 roster 兜底部门(外贸部)", c4.department);
+  }
+
+  section("19. flush 顺手补报 /install(若未上报过)");
+  {
+    const installCalls = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        if (req.url === "/install") {
+          installCalls.push(JSON.parse(body || "{}"));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: true, installed_at: new Date().toISOString() }));
+        } else if (req.url.startsWith("/config")) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ collect_level: "thin" }));
+        } else {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end("{}");
+        }
+      });
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const port = srv.address().port;
+
+    const home = mkhome();
+    const vantageDir = path.join(home, ".vantage");
+    fs.mkdirSync(vantageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(vantageDir, "config.json"),
+      JSON.stringify({
+        name: "王五",
+        department: "技术部",
+        server_url: `http://127.0.0.1:${port}`,
+        token: "t",
+        installed_at: new Date().toISOString(),
+      })
+    );
+    // state.json 没有 __install_reported__ → flush 应补报
+    const r = await runSandboxA(path.join(AGENT, "flush.cjs"), [], home);
+    ok(r.status === 0, "flush exit 0", r.stderr);
+    ok(installCalls.some((c) => c.name === "王五"), "flush 补报了 /install", `calls=${JSON.stringify(installCalls)}`);
+
+    // state.json 里应有 __install_reported__ 标记
+    const state = JSON.parse(fs.readFileSync(path.join(vantageDir, "state.json"), "utf8"));
+    ok(state.__install_reported__ === true, "state.json 置位 __install_reported__");
+
+    // 再跑一次 flush → 不重复上报
+    installCalls.length = 0;
+    await runSandboxA(path.join(AGENT, "flush.cjs"), [], home);
+    ok(installCalls.length === 0, "已上报 → 不重复", `calls=${installCalls.length}`);
+
+    srv.close();
   }
 
   // ============================================================

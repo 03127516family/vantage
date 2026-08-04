@@ -1,0 +1,7 @@
+{
+  "default": "thin",
+  "overrides": {
+    "张三": "full"
+  },
+  "_comment": "default 是全员默认级别(thin=薄采集/full=含 history);overrides 单独给某人配级别。改完直接 PUT 覆盖 s3://<bucket>/<prefix>collect-levels.json,Lambda 5 分钟内生效。"
+}

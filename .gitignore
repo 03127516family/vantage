@@ -9,9 +9,3 @@ node_modules/
 
 # 系统
 .DS_Store
-
-# 本仓库仅保留 plugin 员工端代码,服务端/测试/文档已拆分
-/server/
-/tests/
-/tools/
-/docs/
