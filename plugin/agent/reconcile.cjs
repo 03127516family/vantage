@@ -176,6 +176,13 @@ async function main() {
   core.ensureDirs();
   const cfg = core.loadConfig();
 
+  // 采集级别(同步,立即返回旧缓存或 thin;若缓存过期/缺失,后台异步刷新)。
+  // 放在最前面是为了让所有路径(包括 SessionStart 节流 return 的路径)都能触发后台刷新——
+  // 否则管理员改 collect-levels.json 后,员工要等"真的跑完一次完整 reconcile"(不被节流)
+  // 才会刷新缓存,延迟可能远超 30 分钟。
+  // 同步调用不阻塞钩子;后台 HTTP 由 fetchCollectLevel 内部 fire-and-forget。
+  const collectLevel = core.fetchCollectLevel(cfg);
+
   const args = parseArgs(process.argv);
   const sources = args.only ? SOURCES.filter((s) => s.tool === args.only) : SOURCES;
 
@@ -262,10 +269,6 @@ async function main() {
   // 剪 state 只按回看窗口，不掺 installed_at：装前会话的"已采"标记是纠偏的证据，
   // 若被 --only 单源扫描按安装闸口剪掉，后续身份变更就无从知道它该重传。
   core.pruneState(recentCutoff);
-
-  // 采集级别: full 时给本轮扫描的所有记录带 history。
-  // fetchCollectLevel 是同步函数(立即返回旧缓存或 thin,后台异步刷新),永不阻塞钩子。
-  const collectLevel = core.fetchCollectLevel(cfg);
 
   // Codex 账户额度（wham/usage）：Codex 专用扫描（--only codex）和全量 reconcile（含 codex 源）都拉。
   // 专用扫描与定时任务同节流（30min/5min）；全量 reconcile 单独 30min 节流，避免每次开会话都调 wham。
