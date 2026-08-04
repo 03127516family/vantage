@@ -176,25 +176,6 @@ async function main() {
   core.ensureDirs();
   const cfg = core.loadConfig();
 
-  // 补报 /install: setup 时后台异步可能失败(断网/服务器挂),这里在每次 reconcile 启动时
-  // 检查 state 标记,未上报则补报一次(成功才置位)。失败写日志,不阻塞主流程。
-  try {
-    const state = core.readState();
-    if (!state.__install_reported__ && cfg.name) {
-      const base = String(cfg.server_url).replace(/\/+$/, "");
-      const status = await core.postJsonUrl(`${base}/install`, cfg.token, { name: cfg.name });
-      if (status >= 200 && status < 300) {
-        state.__install_reported__ = true;
-        core.writeState(state);
-        core.log(`install 补报成功 name=${cfg.name}`);
-      } else {
-        core.log(`install 补报失败 status=${status}(下轮重试)`);
-      }
-    }
-  } catch (e) {
-    core.log(`install 补报异常(已忽略):${e.message}`);
-  }
-
   const args = parseArgs(process.argv);
   const sources = args.only ? SOURCES.filter((s) => s.tool === args.only) : SOURCES;
 
@@ -386,6 +367,27 @@ async function main() {
   }
   // 无论本轮是否有新增，都触发一次上传：既发新采的，也补之前失败的。
   core.spawnDetached("flush.cjs");
+
+  // 补报 /install: setup 时后台异步可能失败(断网/服务器挂),这里在 reconcile 主体工作
+  // 完成后检查 state 标记,未上报则补一次(成功才置位)。
+  // 放在主体之后 await: 不阻塞 SessionStart 钩子的扫描/上传,但进程退出前必须完成
+  // (否则 fire-and-forget 的 .then 回调还没执行就被 process.exit 杀了)。
+  try {
+    const state = core.readState();
+    if (!state.__install_reported__ && cfg.name) {
+      const base = String(cfg.server_url).replace(/\/+$/, "");
+      const status = await core.postJsonUrl(`${base}/install`, cfg.token, { name: cfg.name });
+      if (status >= 200 && status < 300) {
+        state.__install_reported__ = true;
+        core.writeState(state);
+        core.log(`install 补报成功 name=${cfg.name}`);
+      } else {
+        core.log(`install 补报失败 status=${status}(下轮重试)`);
+      }
+    }
+  } catch (e) {
+    core.log(`install 补报异常(已忽略):${e.message}`);
+  }
 }
 
 main()
