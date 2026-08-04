@@ -237,42 +237,58 @@ function getJson(cfg, path, timeoutMs = 15000) {
 }
 
 // ---- 采集级别(thin|full) ----
-// 进程内 + state.json 双层缓存,30 分钟内不重复请求;失败沿用上次值,从未拉过 → "thin"。
+// 进程内 + state.json 双层缓存。读时永不阻塞:主流程立即用旧缓存(或 thin 默认),
+// 网络拉取作为后台刷新(刷新成功才写缓存,下轮用)。这样 capture/reconcile 钩子
+// 永远不被 HTTP 拖慢,员工无感。
 const COLLECT_LEVEL_TTL_MS = 30 * 60 * 1000;
 let collectLevelCache = { value: null, at: 0 };
+let collectLevelRefreshing = false; // 防并发重复刷新
 
-async function fetchCollectLevel(cfgOverride) {
+function fetchCollectLevel(cfgOverride) {
   const cfg = cfgOverride || loadConfig();
-  // 1. 模块内缓存
-  if (collectLevelCache.value && Date.now() - collectLevelCache.at < COLLECT_LEVEL_TTL_MS) {
+  const now = Date.now();
+  // 1. 模块内缓存命中 → 立即返回
+  if (collectLevelCache.value && now - collectLevelCache.at < COLLECT_LEVEL_TTL_MS) {
     return collectLevelCache.value;
   }
-  // 2. state.json 持久化缓存
+  // 2. state.json 持久化缓存命中 → 立即返回(顺便回填模块缓存)
   const state = readState();
   const persisted = state.__collect_level__;
-  if (
+  const persistedFresh =
     persisted &&
     persisted.value &&
     Number.isFinite(Number(persisted.at)) &&
-    Date.now() - Number(persisted.at) < COLLECT_LEVEL_TTL_MS
-  ) {
+    now - Number(persisted.at) < COLLECT_LEVEL_TTL_MS;
+  if (persistedFresh) {
     collectLevelCache = { value: persisted.value, at: Number(persisted.at) };
     return persisted.value;
   }
-  // 3. 网络拉取
+  // 3. 缓存过期/缺失:主流程立即用旧值(或 thin),后台 detached 刷新
+  const fallback = persisted && persisted.value ? persisted.value : "thin";
+  if (collectLevelRefreshing) return fallback;
+  collectLevelRefreshing = true;
   const name = cfg.name || "";
-  if (!name) return "thin";
-  const r = await getJson(cfg, `/config?name=${encodeURIComponent(name)}`);
-  const level = r && (r.collect_level === "full" || r.collect_level === "thin") ? r.collect_level : null;
-  if (level) {
-    collectLevelCache = { value: level, at: Date.now() };
-    state.__collect_level__ = { value: level, at: Date.now() };
-    writeState(state);
-    return level;
+  if (!name) {
+    collectLevelRefreshing = false;
+    return fallback;
   }
-  // 4. 网络失败兜底: 有持久化旧值就用(即使过期),从未有过 → "thin"
-  if (persisted && persisted.value) return persisted.value;
-  return "thin";
+  // fire-and-forget: 不 await,后台刷新缓存
+  getJson(cfg, `/config?name=${encodeURIComponent(name)}`)
+    .then((r) => {
+      const level = r && (r.collect_level === "full" || r.collect_level === "thin") ? r.collect_level : null;
+      if (level) {
+        collectLevelCache = { value: level, at: Date.now() };
+        const st = readState();
+        st.__collect_level__ = { value: level, at: Date.now() };
+        writeState(st);
+        log(`collect level refreshed: ${level}`);
+      }
+    })
+    .catch((e) => log(`collect level refresh failed (ignored): ${e && e.message ? e.message : e}`))
+    .finally(() => {
+      collectLevelRefreshing = false;
+    });
+  return fallback;
 }
 
 /** 读取 stdin（钩子通过管道传 JSON）。非管道（手动运行）立即返回空串。带超时兜底。 */

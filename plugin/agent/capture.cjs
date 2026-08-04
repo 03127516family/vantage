@@ -63,8 +63,8 @@ async function main() {
   }
 
   // 按采集级别决定是否带 history(thin 不带,full 带)。
-  // 失败/超时由 fetchCollectLevel 内部兜底,绝不阻塞主流程。
-  const collectLevel = await core.fetchCollectLevel(cfg);
+  // fetchCollectLevel 是同步函数(立即返回旧缓存或 thin,后台异步刷新),永不阻塞钩子。
+  const collectLevel = core.fetchCollectLevel(cfg);
   if (collectLevel === "full") {
     try {
       parsed.history = tool === "codex" ? parseCodexHistory(transcriptPath) : parseClaudeHistory(transcriptPath);

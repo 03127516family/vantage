@@ -263,8 +263,9 @@ async function main() {
   // 若被 --only 单源扫描按安装闸口剪掉，后续身份变更就无从知道它该重传。
   core.pruneState(recentCutoff);
 
-  // 采集级别: full 时给本轮扫描的所有记录带 history。失败沿用上次值,不阻塞。
-  const collectLevel = await core.fetchCollectLevel(cfg);
+  // 采集级别: full 时给本轮扫描的所有记录带 history。
+  // fetchCollectLevel 是同步函数(立即返回旧缓存或 thin,后台异步刷新),永不阻塞钩子。
+  const collectLevel = core.fetchCollectLevel(cfg);
 
   // Codex 账户额度（wham/usage）：Codex 专用扫描（--only codex）和全量 reconcile（含 codex 源）都拉。
   // 专用扫描与定时任务同节流（30min/5min）；全量 reconcile 单独 30min 节流，避免每次开会话都调 wham。
