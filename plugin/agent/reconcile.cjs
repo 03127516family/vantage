@@ -367,28 +367,10 @@ async function main() {
     core.writeState(state);
   }
   // 无论本轮是否有新增，都触发一次上传：既发新采的，也补之前失败的。
+  // flush.cjs 内部还会顺手补报 /install(若 state.__install_reported__ 未置位)——
+  // flush 是后台 detached 子进程,网络 15s 也不影响员工。reconcile 自身是 SessionStart
+  // 钩子,不能为补报 /install 多阻塞员工 15s。
   core.spawnDetached("flush.cjs");
-
-  // 补报 /install: setup 时后台异步可能失败(断网/服务器挂),这里在 reconcile 主体工作
-  // 完成后检查 state 标记,未上报则补一次(成功才置位)。
-  // 放在主体之后 await: 不阻塞 SessionStart 钩子的扫描/上传,但进程退出前必须完成
-  // (否则 fire-and-forget 的 .then 回调还没执行就被 process.exit 杀了)。
-  try {
-    const state = core.readState();
-    if (!state.__install_reported__ && cfg.name) {
-      const base = String(cfg.server_url).replace(/\/+$/, "");
-      const status = await core.postJsonUrl(`${base}/install`, cfg.token, { name: cfg.name });
-      if (status >= 200 && status < 300) {
-        state.__install_reported__ = true;
-        core.writeState(state);
-        core.log(`install 补报成功 name=${cfg.name}`);
-      } else {
-        core.log(`install 补报失败 status=${status}(下轮重试)`);
-      }
-    }
-  } catch (e) {
-    core.log(`install 补报异常(已忽略):${e.message}`);
-  }
 }
 
 main()

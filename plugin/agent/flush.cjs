@@ -120,5 +120,28 @@ async function main() {
 }
 
 main()
+  .then(async () => {
+    // 补报 /install: setup 时后台异步可能失败(断网/服务器挂),这里在 flush 末尾顺手补一次
+    // (成功才置位,失败下轮重试)。flush 是后台 detached 子进程,15s 网络也不影响员工。
+    // 放这里而不是 reconcile 末尾,是因为 reconcile 是 SessionStart 钩子,多 15s 阻塞员工能感知。
+    // 即使 spool 为空(main 提前 return)也要补报,所以放在 .then 里而不是 main 内部。
+    const cfg = core.loadConfig();
+    try {
+      const state = core.readState();
+      if (!state.__install_reported__ && cfg.name) {
+        const base = String(cfg.server_url).replace(/\/+$/, "");
+        const status = await core.postJsonUrl(`${base}/install`, cfg.token, { name: cfg.name });
+        if (status >= 200 && status < 300) {
+          state.__install_reported__ = true;
+          core.writeState(state);
+          core.log(`install 补报成功 name=${cfg.name}`);
+        } else {
+          core.log(`install 补报失败 status=${status}(下轮重试)`);
+        }
+      }
+    } catch (e) {
+      core.log(`install 补报异常(已忽略):${e.message}`);
+    }
+  })
   .catch((e) => core.log("flush fatal: " + String(e)))
   .finally(() => process.exit(0));
