@@ -237,12 +237,12 @@ function getJson(cfg, path, timeoutMs = 15000) {
 }
 
 // ---- 采集级别(thin|full) ----
-// 进程内 + state.json 双层缓存。读时永不阻塞:主流程立即用旧缓存(或 thin 默认),
-// 网络拉取作为后台刷新(刷新成功才写缓存,下轮用)。这样 capture/reconcile 钩子
-// 永远不被 HTTP 拖慢,员工无感。
+// 进程内 + state.json 双层缓存。读时永不阻塞:主流程立即用旧缓存(或 thin 默认)。
+// 真正的网络刷新由 flush.cjs 在末尾 await 调用(因为 flush 是 detached 后台子进程,
+// 跑 15s 员工无感;若放在 capture/reconcile 里,主流程 process.exit 会在 HTTP 完成前
+// 杀掉请求,缓存永远刷新不了)。
 const COLLECT_LEVEL_TTL_MS = 30 * 60 * 1000;
 let collectLevelCache = { value: null, at: 0 };
-let collectLevelRefreshing = false; // 防并发重复刷新
 
 function fetchCollectLevel(cfgOverride) {
   const cfg = cfgOverride || loadConfig();
@@ -263,32 +263,43 @@ function fetchCollectLevel(cfgOverride) {
     collectLevelCache = { value: persisted.value, at: Number(persisted.at) };
     return persisted.value;
   }
-  // 3. 缓存过期/缺失:主流程立即用旧值(或 thin),后台 detached 刷新
-  const fallback = persisted && persisted.value ? persisted.value : "thin";
-  if (collectLevelRefreshing) return fallback;
-  collectLevelRefreshing = true;
+  // 3. 缓存过期/缺失:返回旧值(或 thin)。flush.cjs 会在后台顺手刷新。
+  return persisted && persisted.value ? persisted.value : "thin";
+}
+
+// 后台刷新采集级别缓存。返回 Promise,由 flush.cjs 末尾 await。
+// 成功:写入 state.json,下轮 fetchCollectLevel 用新值。
+// 失败:仅写日志,不抛错。
+// 缓存仍新鲜时跳过 HTTP(避免每次 flush 都白拉一次)。
+async function refreshCollectLevel(cfgOverride) {
+  const cfg = cfgOverride || loadConfig();
   const name = cfg.name || "";
-  if (!name) {
-    collectLevelRefreshing = false;
-    return fallback;
+  if (!name) return false;
+  // 缓存还新鲜 → 跳过 HTTP
+  const state0 = readState();
+  const persisted = state0.__collect_level__;
+  if (
+    persisted &&
+    persisted.value &&
+    Number.isFinite(Number(persisted.at)) &&
+    Date.now() - Number(persisted.at) < COLLECT_LEVEL_TTL_MS
+  ) {
+    return true; // 缓存新鲜,无需刷新
   }
-  // fire-and-forget: 不 await,后台刷新缓存
-  getJson(cfg, `/config?name=${encodeURIComponent(name)}`)
-    .then((r) => {
-      const level = r && (r.collect_level === "full" || r.collect_level === "thin") ? r.collect_level : null;
-      if (level) {
-        collectLevelCache = { value: level, at: Date.now() };
-        const st = readState();
-        st.__collect_level__ = { value: level, at: Date.now() };
-        writeState(st);
-        log(`collect level refreshed: ${level}`);
-      }
-    })
-    .catch((e) => log(`collect level refresh failed (ignored): ${e && e.message ? e.message : e}`))
-    .finally(() => {
-      collectLevelRefreshing = false;
-    });
-  return fallback;
+  try {
+    const r = await getJson(cfg, `/config?name=${encodeURIComponent(name)}`);
+    const level = r && (r.collect_level === "full" || r.collect_level === "thin") ? r.collect_level : null;
+    if (!level) return false;
+    collectLevelCache = { value: level, at: Date.now() };
+    const st = readState();
+    st.__collect_level__ = { value: level, at: Date.now() };
+    writeState(st);
+    log(`collect level refreshed: ${level}`);
+    return true;
+  } catch (e) {
+    log(`collect level refresh failed (ignored): ${e && e.message ? e.message : e}`);
+    return false;
+  }
 }
 
 /** 读取 stdin（钩子通过管道传 JSON）。非管道（手动运行）立即返回空串。带超时兜底。 */
@@ -457,6 +468,7 @@ module.exports = {
   postJsonUrl,
   getJson,
   fetchCollectLevel,
+  refreshCollectLevel,
   readStdin,
   spawnDetached,
   spawnShellDetached,

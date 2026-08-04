@@ -121,11 +121,21 @@ async function main() {
 
 main()
   .then(async () => {
-    // 补报 /install: setup 时后台异步可能失败(断网/服务器挂),这里在 flush 末尾顺手补一次
-    // (成功才置位,失败下轮重试)。flush 是后台 detached 子进程,15s 网络也不影响员工。
-    // 放这里而不是 reconcile 末尾,是因为 reconcile 是 SessionStart 钩子,多 15s 阻塞员工能感知。
-    // 即使 spool 为空(main 提前 return)也要补报,所以放在 .then 里而不是 main 内部。
+    // 后台家务:flush 是 detached 子进程,跑 15s 网络也不影响员工。这里顺手做两件异步任务:
+    // 1) 刷新采集级别缓存(fetchCollectLevel 在主流程只读缓存,真正刷新在这里)
+    // 2) 补报 /install(若 state.__install_reported__ 未置位)
+    // 放在 .then 里而不是 main 内部,确保 spool 为空提前 return 时也能执行。
     const cfg = core.loadConfig();
+
+    // 1) 刷新采集级别缓存(缓存新鲜时 refreshCollectLevel 内部也不会重复发 HTTP——
+    //    但调用方在 flush 末尾,网络等员工无感,所以即使偶尔多刷一次也无妨)。
+    try {
+      await core.refreshCollectLevel(cfg);
+    } catch (e) {
+      core.log(`collect level refresh 异常(已忽略):${e.message}`);
+    }
+
+    // 2) 补报 /install
     try {
       const state = core.readState();
       if (!state.__install_reported__ && cfg.name) {
